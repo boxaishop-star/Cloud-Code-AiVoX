@@ -1,0 +1,22 @@
+name: aivox-core CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npx tsc -p tsconfig.json --noEmit
+      - run: npx vitest run
+      # Раздел 25 ТЗ, Этап 0: "ворота" этапа — golden test и forbidden responses
+      # обязаны быть зелёными. Этот job делается required check в настройках репозитория,
+      # чтобы merge в main был физически невозможен при красном тесте.

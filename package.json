@@ -1,0 +1,19 @@
+{
+  "name": "@aivox/core",
+  "version": "0.1.0",
+  "description": "AiVoX Domain Core — Этап 0. Orchestrator, Intent Engine, Validation, Tool Layer. Без UI, без БД — тестируется в изоляции.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5",
+    "@types/node": "^20.14.15"
+  }
+}
