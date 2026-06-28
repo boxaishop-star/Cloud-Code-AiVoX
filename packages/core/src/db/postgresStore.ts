@@ -1,11 +1,11 @@
 // PostgresStore — альтернативная реализация того же контракта, что InMemoryStore.
-// Методы асинхронны (Prisma требует await), поэтому PostgresStore нельзя передать в
-// BusinessAssistantOrchestrator напрямую без адаптации его store-вызовов к async.
-// На Этапе 1 Orchestrator будет доработан под async-интерфейс.
+import { randomUUID } from 'crypto';
 import { ProductCardSchema } from '../schemas/productCard.js';
 import { BusinessFoundationSchema } from '../schemas/businessFoundation.js';
+import { ScoutJobSchema, ScoutChannelSchema } from '../schemas/scoutJob.js';
 import type { ProductCard } from '../schemas/productCard.js';
 import type { BusinessFoundation } from '../schemas/businessFoundation.js';
+import type { ScoutJob } from '../schemas/scoutJob.js';
 import type { ToolAction, ToolActionResult } from '../schemas/toolAction.js';
 import type { DataStore } from '../store.js';
 
@@ -21,6 +21,15 @@ function stripNulls(obj: Record<string, unknown>): Record<string, unknown> {
 function fromPrismaCard(row: Record<string, unknown>): Record<string, unknown> {
   const { db_id: _, ...rest } = row;
   return stripNulls({ ...rest, evidence: (rest.evidence as unknown[]) ?? [] });
+}
+
+/** Конвертирует строку Prisma ScoutJob, нормализуя Json[] и Json поля. */
+function fromPrismaJob(row: Record<string, unknown>): Record<string, unknown> {
+  return stripNulls({
+    ...row,
+    channels: (row.channels as unknown[]) ?? [],
+    stats: (row.stats as Record<string, unknown>) ?? {},
+  });
 }
 
 export class PostgresStore implements DataStore {
@@ -53,6 +62,13 @@ export class PostgresStore implements DataStore {
     });
   }
 
+  async getScoutJobs(tenantId: string): Promise<ScoutJob[]> {
+    const rows: Record<string, unknown>[] = await this.client.scoutJob.findMany({
+      where: { tenant_id: tenantId },
+    });
+    return rows.map((row) => ScoutJobSchema.parse(fromPrismaJob(row)));
+  }
+
   // ──────────────── Write (applyAction) ────────────────
 
   async applyAction(action: ToolAction): Promise<ToolActionResult> {
@@ -73,15 +89,12 @@ export class PostgresStore implements DataStore {
           const p = action.payload as Record<string, unknown>;
           const tenantId = p.tenant_id as string;
           const serviceLine = p.service_line as string;
-
-          // Merge with existing card to respect partial updates
           const existing: Record<string, unknown> | null =
             await this.client.productCard.findFirst({
               where: { tenant_id: tenantId, service_line: serviceLine },
             });
           const base = existing ? fromPrismaCard(existing) : {};
           const normalized = ProductCardSchema.parse({ ...base, ...p });
-
           await this.client.productCard.upsert({
             where: { tenant_service_line: { tenant_id: tenantId, service_line: serviceLine } },
             create: normalized,
@@ -94,7 +107,6 @@ export class PostgresStore implements DataStore {
           const p = action.payload as Record<string, unknown>;
           const tenantId = p.tenant_id as string;
           const serviceLine = p.service_line as string;
-
           const existing: Record<string, unknown> | null =
             await this.client.productCard.findFirst({
               where: { tenant_id: tenantId, service_line: serviceLine },
@@ -120,11 +132,89 @@ export class PostgresStore implements DataStore {
           return { action, applied: true };
         }
 
+        case 'create_scout_job': {
+          const { tenant_id, search_signals, poll_interval_minutes } = action.payload;
+          const now = new Date().toISOString();
+          const data = {
+            id: randomUUID(),
+            tenant_id,
+            search_signals: search_signals ?? [],
+            poll_interval_minutes: poll_interval_minutes ?? 60,
+            channels: [],
+            created_at: now,
+            updated_at: now,
+            stats: {},
+          };
+          await this.client.scoutJob.create({ data });
+          const job = ScoutJobSchema.parse(data);
+          return { action: { ...action, payload: job as any }, applied: true };
+        }
+
+        case 'add_scout_channel': {
+          const { tenant_id, scout_job_id, platform, identifier } = action.payload;
+          const row: Record<string, unknown> | null = await this.client.scoutJob.findFirst({
+            where: { id: scout_job_id, tenant_id },
+          });
+          if (!row) {
+            return { action, applied: false, error: `ScoutJob '${scout_job_id}' not found` };
+          }
+          const channels = (row.channels as any[]) ?? [];
+          const exists = channels.some((c: any) => c.platform === platform && c.identifier === identifier);
+          if (exists) {
+            return { action, applied: false, error: `Channel ${platform}:${identifier} already added` };
+          }
+          const newChannel = ScoutChannelSchema.parse({ platform, identifier, added_manually: true });
+          const updatedChannels = [...channels, newChannel];
+          await this.client.scoutJob.update({
+            where: { id: scout_job_id },
+            data: { channels: updatedChannels, updated_at: new Date().toISOString() },
+          });
+          const job = ScoutJobSchema.parse(fromPrismaJob({ ...row, channels: updatedChannels }));
+          return { action: { ...action, payload: job as any }, applied: true };
+        }
+
+        case 'remove_scout_channel': {
+          const { tenant_id, scout_job_id, platform, identifier } = action.payload;
+          const row: Record<string, unknown> | null = await this.client.scoutJob.findFirst({
+            where: { id: scout_job_id, tenant_id },
+          });
+          if (!row) {
+            return { action, applied: false, error: `ScoutJob '${scout_job_id}' not found` };
+          }
+          const channels = (row.channels as any[]) ?? [];
+          const filtered = channels.filter((c: any) => !(c.platform === platform && c.identifier === identifier));
+          if (filtered.length === channels.length) {
+            return { action, applied: false, error: `Channel ${platform}:${identifier} not found in job` };
+          }
+          await this.client.scoutJob.update({
+            where: { id: scout_job_id },
+            data: { channels: filtered, updated_at: new Date().toISOString() },
+          });
+          const job = ScoutJobSchema.parse(fromPrismaJob({ ...row, channels: filtered }));
+          return { action: { ...action, payload: job as any }, applied: true };
+        }
+
+        case 'update_scout_job_status': {
+          const { tenant_id, scout_job_id, status } = action.payload;
+          const row: Record<string, unknown> | null = await this.client.scoutJob.findFirst({
+            where: { id: scout_job_id, tenant_id },
+          });
+          if (!row) {
+            return { action, applied: false, error: `ScoutJob '${scout_job_id}' not found` };
+          }
+          await this.client.scoutJob.update({
+            where: { id: scout_job_id },
+            data: { status, updated_at: new Date().toISOString() },
+          });
+          const job = ScoutJobSchema.parse(fromPrismaJob({ ...row, status }));
+          return { action: { ...action, payload: job as any }, applied: true };
+        }
+
         default:
           return {
             action,
             applied: false,
-            error: `Action "${action.type}" не реализован на Этапе 0`,
+            error: `Action "${(action as any).type}" не реализован`,
           };
       }
     } catch (e) {

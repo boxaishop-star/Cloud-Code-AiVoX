@@ -99,3 +99,20 @@ model RelationshipCard {
   @@index([tenant_id])
   @@map("relationship_cards")
 }
+
+// Раздел 7.3.8 ТЗ: задача Scout — список каналов и сигналов поиска без привязки к
+// конкретной платформе. Коннекторы (Telegram, VK) добавляются отдельно в Этапе 1.
+model ScoutJob {
+  id                    String   @id @default(uuid())
+  tenant_id             String
+  status                String   @default("paused")   // running|paused|stopped
+  channels              Json[]                         // { platform, identifier, added_manually }
+  search_signals        String[]
+  poll_interval_minutes Int      @default(60)
+  created_at            String
+  updated_at            String
+  stats                 Json     @default("{}")
+
+  @@index([tenant_id])
+  @@map("scout_jobs")
+}

@@ -1,11 +1,13 @@
 import type { ProductCard } from './schemas/productCard.js';
 import type { BusinessFoundation } from './schemas/businessFoundation.js';
+import type { ScoutJob } from './schemas/scoutJob.js';
 import type { ToolAction, ToolActionResult } from './schemas/toolAction.js';
 
 export interface DataStore {
   getFoundation(tenantId: string): Promise<BusinessFoundation | undefined>;
   getProductCards(tenantId: string): Promise<ProductCard[]>;
   getRelationshipCards(tenantId: string): Promise<Record<string, unknown>[]>;
+  getScoutJobs(tenantId: string): Promise<ScoutJob[]>;
   applyAction(action: ToolAction): Promise<ToolActionResult>;
 }
 

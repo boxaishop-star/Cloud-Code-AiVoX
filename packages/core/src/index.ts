@@ -1,4 +1,5 @@
 export * from "./schemas/businessFoundation.js";
+export * from "./schemas/scoutJob.js";
 export * from "./schemas/productCard.js";
 export * from "./schemas/relationshipCard.js";
 export * from "./schemas/toolAction.js";
