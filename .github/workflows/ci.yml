@@ -18,6 +18,13 @@ jobs:
       - name: Install workspace dependencies
         run: npm install
 
+      - name: Generate Prisma client
+        run: npx prisma generate --schema packages/core/prisma/schema.prisma
+        env:
+          # Syntactically valid placeholder — prisma generate needs a parseable URL
+          # but never opens a real connection during code generation.
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
+
       - name: Type-check packages/core
         run: npx tsc --noEmit -p packages/core/tsconfig.json
 
