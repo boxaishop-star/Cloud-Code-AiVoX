@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@aivox/core": "*",
+    "@clerk/express": "^2.1.32",
     "dotenv": "^17.4.2",
     "express": "^4.21.0"
   },

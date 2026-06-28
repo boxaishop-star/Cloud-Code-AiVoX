@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>AiVoX — получить session token</title>
+  <script
+    src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js"
+    data-clerk-publishable-key="pk_test_ZmFuY3ktbmV3dC01NS5jbGVyay5hY2NvdW50cy5kZXYk">
+  </script>
+  <style>
+    body { font-family: monospace; padding: 24px; background: #0d1117; color: #c9d1d9; }
+    h2 { color: #58a6ff; }
+    #token-box {
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+      padding: 16px; word-break: break-all; margin-top: 12px;
+      white-space: pre-wrap; font-size: 13px;
+    }
+    #api-result {
+      background: #0d2818; border: 1px solid #238636; border-radius: 6px;
+      padding: 16px; word-break: break-all; margin-top: 16px;
+      white-space: pre-wrap; font-size: 14px; color: #3fb950;
+    }
+    #api-error {
+      background: #2d1117; border: 1px solid #f85149; border-radius: 6px;
+      padding: 16px; margin-top: 16px; font-size: 14px; color: #f85149;
+      white-space: pre-wrap; word-break: break-all;
+    }
+    button {
+      margin-top: 12px; padding: 8px 16px; background: #238636;
+      color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;
+    }
+    button:active { background: #2ea043; }
+    #status { color: #8b949e; margin-top: 8px; font-size: 13px; }
+    .error { color: #f85149; }
+    .warn-box {
+      background: #161b22; border: 1px solid #f0883e; border-radius: 6px;
+      padding: 14px; margin-top: 16px; font-size: 13px; color: #f0883e;
+      line-height: 1.6;
+    }
+    .section-label { color: #8b949e; font-size: 12px; margin-top: 16px; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <h2>AiVoX Dev — Session JWT + auto-test</h2>
+  <div id="status">Ожидание загрузки Clerk...</div>
+
+  <div class="section-label">JWT токен:</div>
+  <div id="token-box" style="display:none"></div>
+  <button id="copy-btn" style="display:none" onclick="copyToken()">Скопировать токен</button>
+
+  <div class="section-label" id="api-label" style="display:none">Результат POST /api/chat:</div>
+  <div id="api-result" style="display:none"></div>
+  <div id="api-error" style="display:none"></div>
+
+  <div id="cdn-error" style="display:none" class="warn-box">
+    ⚠️ <b>Clerk не загрузился (window.Clerk не определён).</b><br><br>
+    Вероятная причина: браузер блокирует загрузку CDN-скриптов для страниц,
+    открытых по протоколу <code>file://</code>.<br><br>
+    <b>Решение — открывайте через локальный http-сервер:</b><br><br>
+    <code>npx http-server . -p 8088 -c-1</code><br><br>
+    Затем откройте:
+    <a href="http://localhost:8088/get-token.html" style="color:#58a6ff;">
+      http://localhost:8088/get-token.html
+    </a>
+    (с нужным <code>?__clerk_ticket=...</code> в URL).
+  </div>
+
+  <script>
+    const PUBLISHABLE_KEY = 'pk_test_ZmFuY3ktbmV3dC01NS5jbGVyay5hY2NvdW50cy5kZXYk';
+    let _token = '';
+
+    async function copyToken() {
+      await navigator.clipboard.writeText(_token);
+      document.getElementById('copy-btn').textContent = '✅ Скопировано!';
+      setTimeout(() => document.getElementById('copy-btn').textContent = 'Скопировать токен', 2000);
+    }
+
+    async function init() {
+      const status = document.getElementById('status');
+
+      if (!window.Clerk) {
+        status.classList.add('error');
+        status.textContent = 'Ошибка: Clerk не загрузился.';
+        document.getElementById('cdn-error').style.display = 'block';
+        return;
+      }
+
+      status.textContent = 'Инициализация Clerk...';
+
+      // data-clerk-publishable-key на <script> → window.Clerk уже является экземпляром,
+      // а не классом; если по какой-то причине это класс — создаём экземпляр вручную.
+      const clerk = typeof window.Clerk === 'function'
+        ? new window.Clerk(PUBLISHABLE_KEY)
+        : window.Clerk;
+      await clerk.load();
+
+      if (!clerk.session) {
+        status.textContent = 'Сессия не найдена. Убедитесь, что страница открыта по sign-in URL с __clerk_ticket=...';
+        return;
+      }
+
+      status.textContent = `Сессия активна (userId: ${clerk.user.id}). Получаю токен...`;
+      _token = await clerk.session.getToken();
+
+      document.getElementById('token-box').style.display = 'block';
+      document.getElementById('token-box').textContent = _token;
+      document.getElementById('copy-btn').style.display = 'inline-block';
+
+      // Сразу отправляем запрос на API — пока токен свежий
+      status.textContent = '✅ Токен получен. Отправляю POST /api/chat...';
+      document.getElementById('api-label').style.display = 'block';
+
+      try {
+        const response = await fetch('http://localhost:3000/api/chat', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${_token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            userMessage: 'Хочу настроить услугу маникюр классический. Цена 1500 рублей за сеанс.'
+          })
+        });
+
+        const result = await response.json();
+        const box = document.getElementById('api-result');
+        box.style.display = 'block';
+        box.textContent = `HTTP ${response.status}\n\n${JSON.stringify(result, null, 2)}`;
+        status.textContent = `✅ Готово. HTTP ${response.status}`;
+      } catch (err) {
+        const errBox = document.getElementById('api-error');
+        errBox.style.display = 'block';
+        errBox.textContent = `fetch() упал: ${err.message}\n\nПроверьте, что API сервер запущен на localhost:3000\nи что CORS разрешён (NODE_ENV !== production).`;
+        status.textContent = 'Ошибка при вызове API.';
+      }
+    }
+
+    // window.onload гарантирует, что внешние <script src> уже выполнились
+    window.onload = function () {
+      init().catch(e => {
+        const status = document.getElementById('status');
+        status.classList.add('error');
+        status.textContent = 'Ошибка: ' + e.message;
+      });
+    };
+  </script>
+</body>
+</html>
