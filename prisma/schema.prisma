@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Раздел 9 ТЗ: каждая модель содержит tenant_id и индекс по нему —
+// изоляция тенантов гарантируется на уровне схемы, не на уровне WHERE-клаузы вручную.
+
+model BusinessFoundation {
+  tenant_id           String  @id                    // один фундамент на тенанта
+  company_description String?
+  business_type       String?
+  market_type         String?                        // "B2B" | "B2C" | "mixed"
+  industry            String?
+  segment             String?
+  icp                 String?
+  buyer_type          String?
+  offer               String?
+  geography           String[]
+  scout_geography     String[]
+  scout_targets       String?
+  search_goal         String?
+  website_url         String?
+  product_summary     String?
+  updated_at          String?
+  updated_by          String?
+
+  @@index([tenant_id])
+  @@map("business_foundations")
+}
+
+model ProductCard {
+  db_id                       String  @id @default(uuid())  // суррогатный PK
+  id                          String                         // пользовательский id
+  tenant_id                   String
+  name                        String
+  category                    String
+  service_line                String
+  description                 String?
+  pricing_model               String                         // per_m3|fixed|from_price|custom
+  unit                        String?
+  price                       Float?
+  currency                    String  @default("RUB")
+  price_rules                 String[]
+  includes                    String[]
+  excludes                    String[]
+  estimate_inputs             String[]
+  variants                    String[]
+  customer_segments           String[]
+  geography                   String[]
+  scout_search_signals        String[]
+  scout_sources               String[]
+  avi_qualification_questions String[]
+  handoff_to_human_rules      String[]
+  readiness_score             Int     @default(0)
+  missing_fields              String[]
+  evidence                    Json[]
+  source                      String  @default("business_assistant")
+  created_from_conversation   Boolean @default(true)
+
+  @@unique([tenant_id, service_line], name: "tenant_service_line")
+  @@index([tenant_id])
+  @@map("product_cards")
+}
+
+model RelationshipCard {
+  db_id                String  @id @default(uuid())  // суррогатный PK
+  id                   String                         // пользовательский id
+  tenant_id            String
+  type                 String                         // lead|customer|company|contact
+  name                 String?
+  company_name         String?
+  contact              String?
+  channel              String?
+  source               String?
+  source_url           String?
+  source_tier          String                         // tier1|tier2|manual (раздел 12 ТЗ)
+  legal_basis          String                         // обязателен — раздел 7.3.2 ТЗ
+  do_not_contact       Boolean @default(false)
+  location             String?
+  market_type          String?
+  segment              String?
+  buyer_type           String?
+  detected_need        String?
+  matched_service_line String?
+  conversation_summary String?
+  status               String  @default("new")
+  next_step            String?
+  confidence_score     Float?
+  owner_agent          String?
+  handoff_required     Boolean @default(false)
+  handoff_reason       String?
+
+  @@unique([tenant_id, id], name: "tenant_card_id")
+  @@index([tenant_id])
+  @@map("relationship_cards")
+}

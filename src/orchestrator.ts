@@ -1,9 +1,10 @@
 import { classifyIntentLocally } from "./intentEngine.js";
 import { validateProposedActions, sanitizeForResponse } from "./validation.js";
-import { InMemoryStore } from "./toolLayer.js";
 import { computeNextStep, computeReadiness } from "./nextStepController.js";
+import type { DataStore } from "./store.js";
 import type { ExtractionProvider } from "./extraction/types.js";
 import type { ToolAction, ToolActionResult } from "./schemas/toolAction.js";
+import type { ProductCard } from "./schemas/productCard.js";
 import type { NextStep } from "./nextStepController.js";
 
 // Раздел 13, ТЗ v3.0 — контракт processBusinessAssistantMessage(input): result.
@@ -26,7 +27,7 @@ export interface OrchestratorResult {
 }
 
 export class BusinessAssistantOrchestrator {
-  constructor(private store: InMemoryStore, private extractor: ExtractionProvider) {}
+  constructor(private store: DataStore, private extractor: ExtractionProvider) {}
 
   async process(input: OrchestratorInput): Promise<OrchestratorResult> {
     const local = classifyIntentLocally(input.userMessage);
@@ -43,19 +44,29 @@ export class BusinessAssistantOrchestrator {
       };
     }
 
-    const existingCards = this.store.getProductCards(input.tenant_id);
+    const [existingCards, foundation] = await Promise.all([
+      this.store.getProductCards(input.tenant_id),
+      this.store.getFoundation(input.tenant_id),
+    ]);
+
     const extraction = await this.extractor.extract(input.userMessage, {
       tenant_id: input.tenant_id,
-      businessFoundation: this.store.getFoundation(input.tenant_id) ?? {},
+      businessFoundation: foundation ?? {},
       productCatalog: existingCards,
     });
 
     const existingCategories = [...new Set(existingCards.map((c) => c.category))];
     const { validActions, errors } = validateProposedActions(extraction.proposed_actions, existingCards, existingCategories);
 
-    const appliedActions = validActions.map((a) => this.store.applyAction(a));
+    const appliedActions = await Promise.all(validActions.map((a) => this.store.applyAction(a)));
 
-    const updatedCard = this.store.getProductCards(input.tenant_id).find((c) =>
+    // Expose toolLayer failures in rejectedActions so callers don't have to inspect appliedActions[].error.
+    const toolLayerErrors = appliedActions
+      .filter((r) => !r.applied && r.error)
+      .map((r) => `${r.action.type}: ${r.error!}`);
+
+    const freshCards = await this.store.getProductCards(input.tenant_id);
+    const updatedCard = freshCards.find((c) =>
       validActions.some((a) => a.type === "upsert_product_card" && (a.payload as any).service_line === c.service_line),
     );
     if (updatedCard) {
@@ -69,7 +80,7 @@ export class BusinessAssistantOrchestrator {
       assistantResponse: this.renderResponse(extraction.intent, updatedCard, appliedActions, nextStep),
       responseSource: "business_assistant_orchestrator",
       appliedActions,
-      rejectedActions: errors,
+      rejectedActions: [...errors, ...toolLayerErrors],
       intent: extraction.intent,
       confidence: extraction.confidence,
     };
@@ -83,7 +94,7 @@ export class BusinessAssistantOrchestrator {
   // Раздел 20.2, 22.2 ТЗ: ответ собирается из реальных сохранённых данных через
   // sanitizeForResponse — поэтому "[object Object]" архитектурно невозможен здесь,
   // а не "проверяется тестом постфактум".
-  private renderResponse(intent: string, card: ReturnType<InMemoryStore["getProductCards"]>[number] | undefined, applied: ToolActionResult[], nextStep?: NextStep): string {
+  private renderResponse(intent: string, card: ProductCard | undefined, applied: ToolActionResult[], nextStep?: NextStep): string {
     if (!card) {
       return "Понял. Расскажите подробнее про услугу, которую настраиваем — название, цену и что входит в стоимость.";
     }

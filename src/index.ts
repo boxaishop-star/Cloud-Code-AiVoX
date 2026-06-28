@@ -9,3 +9,4 @@ export * from "./nextStepController.js";
 export * from "./orchestrator.js";
 export * from "./extraction/types.js";
 export * from "./extraction/mockProvider.js";
+export * from "./extraction/claudeProvider.js";
