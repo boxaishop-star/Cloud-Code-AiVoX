@@ -24,7 +24,7 @@ export const ScoutJobSchema = z.object({
   poll_interval_minutes: z.number().int().positive().default(60),
   created_at: z.string(),
   updated_at: z.string(),
-  stats: ScoutJobStatsSchema.default({}),
+  stats: ScoutJobStatsSchema.default({ messages_scanned: 0, signals_found: 0, cards_created: 0 }),
 });
 export type ScoutJob = z.infer<typeof ScoutJobSchema>;
 
