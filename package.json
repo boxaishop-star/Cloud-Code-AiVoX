@@ -1,31 +1,12 @@
 {
-  "name": "@aivox/core",
-  "version": "0.1.0",
-  "description": "AiVoX Domain Core — Этап 0. Orchestrator, Intent Engine, Validation, Tool Layer. Без UI, без БД — тестируется в изоляции.",
-  "type": "module",
+  "name": "aivox-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "chat": "tsx scripts/chat.ts",
-    "db:up": "docker compose up -d",
-    "db:migrate": "prisma migrate dev",
-    "db:generate": "prisma generate"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.106.0",
-    "@prisma/adapter-pg": "^7.8.0",
-    "@prisma/client": "^7.8.0",
-    "dotenv": "^17.4.2",
-    "pg": "^8.22.0",
-    "prisma": "^7.8.0",
-    "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "@types/node": "^20.14.15",
-    "@types/pg": "^8.20.0",
-    "tsx": "^4.22.4",
-    "typescript": "^5.5.4",
-    "vitest": "^2.0.5"
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
   }
 }

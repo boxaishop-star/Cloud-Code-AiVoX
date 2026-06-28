@@ -1,4 +1,4 @@
-name: aivox-core CI
+name: aivox CI
 
 on:
   pull_request:
@@ -14,9 +14,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install
-      - run: npx tsc -p tsconfig.json --noEmit
-      - run: npx vitest run
+
+      - name: Install workspace dependencies
+        run: npm install
+
+      - name: Type-check packages/core
+        run: npx tsc --noEmit -p packages/core/tsconfig.json
+
+      - name: Type-check apps/api
+        run: npx tsc --noEmit -p apps/api/tsconfig.json
+
+      - name: Test packages/core
+        run: npm run test --workspace=packages/core
+
+      - name: Test apps/api
+        run: npm run test --workspace=apps/api
       # Раздел 25 ТЗ, Этап 0: "ворота" этапа — golden test и forbidden responses
       # обязаны быть зелёными. Этот job делается required check в настройках репозитория,
       # чтобы merge в main был физически невозможен при красном тесте.
+      # Integration/DB-тесты (требующие ANTHROPIC_API_KEY и DATABASE_URL) корректно
+      # пропускаются через skipIf — секреты в этот workflow намеренно не добавлены.
