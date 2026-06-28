@@ -5,12 +5,12 @@ import { ProductCardSchema } from "./schemas/productCard.js";
 import type { BusinessFoundation } from "./schemas/businessFoundation.js";
 import type { ScoutJob } from "./schemas/scoutJob.js";
 import { ScoutJobSchema, ScoutChannelSchema } from "./schemas/scoutJob.js";
-import type { DataStore } from "./store.js";
+import type { DataStore, AdminDataStore } from "./store.js";
 
 // Раздел 9 ТЗ (мультитенантность): хранилище партиционировано по tenant_id на уровне
 // структуры данных, а не "не забыли добавить WHERE" — на Этапе 1 та же гарантия
 // обеспечивается слоем доступа к Postgres с автоматическим фильтром по tenant_id.
-export class InMemoryStore implements DataStore {
+export class InMemoryStore implements AdminDataStore {
   private foundations = new Map<string, BusinessFoundation>();
   private productCards = new Map<string, ProductCard[]>(); // key: tenant_id
   private relationshipCards = new Map<string, Record<string, unknown>[]>();
@@ -28,6 +28,10 @@ export class InMemoryStore implements DataStore {
   getScoutJobs(tenantId: string): Promise<ScoutJob[]> {
     const jobs = [...this.scoutJobs.values()].filter((j) => j.tenant_id === tenantId);
     return Promise.resolve(jobs);
+  }
+  // AdminDataStore — раздел 9.1 ТЗ. Источник: уникальные tenant_id из foundations.
+  getAllTenants(): Promise<string[]> {
+    return Promise.resolve([...this.foundations.keys()]);
   }
 
   applyAction(action: ToolAction): Promise<ToolActionResult> {

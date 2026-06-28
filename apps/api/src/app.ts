@@ -6,6 +6,7 @@ import {
   ClaudeExtractionProvider,
   getPrismaClient,
   getRoleFromClerkUser,
+  type AdminDataStore,
 } from '@aivox/core';
 
 export const app = express();
@@ -26,6 +27,48 @@ app.use(clerkMiddleware());
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+app.get('/api/admin/tenants', async (req, res) => {
+  const { userId } = getAuth(req);
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const user = await clerkClient.users.getUser(userId);
+  const role = getRoleFromClerkUser({
+    publicMetadata: user.publicMetadata as Record<string, unknown>,
+  });
+
+  if (role !== 'platform_owner') {
+    res.status(403).json({ error: 'Forbidden: requires platform_owner role' });
+    return;
+  }
+
+  // AUDIT LOG — раздел 19 ТЗ (временный console-лог до подключения audit-сервиса)
+  console.log(`[AUDIT] actor=${userId} action=getAllTenants timestamp=${new Date().toISOString()}`);
+
+  try {
+    const store = new PostgresStore(getPrismaClient());
+    const tenantIds = await (store as unknown as AdminDataStore).getAllTenants();
+
+    const summaries = await Promise.all(
+      tenantIds.map(async (tenant_id) => {
+        const foundation = await store.getFoundation(tenant_id);
+        return {
+          tenant_id,
+          company_description: foundation?.company_description ?? null,
+          market_type: foundation?.market_type ?? null,
+        };
+      }),
+    );
+
+    res.json({ tenants: summaries });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
 });
 
 app.post('/api/chat', async (req, res) => {

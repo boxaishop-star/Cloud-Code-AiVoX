@@ -7,7 +7,7 @@ import type { ProductCard } from '../schemas/productCard.js';
 import type { BusinessFoundation } from '../schemas/businessFoundation.js';
 import type { ScoutJob } from '../schemas/scoutJob.js';
 import type { ToolAction, ToolActionResult } from '../schemas/toolAction.js';
-import type { DataStore } from '../store.js';
+import type { DataStore, AdminDataStore } from '../store.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyPrismaClient = any;
@@ -32,7 +32,7 @@ function fromPrismaJob(row: Record<string, unknown>): Record<string, unknown> {
   });
 }
 
-export class PostgresStore implements DataStore {
+export class PostgresStore implements AdminDataStore {
   constructor(private client: AnyPrismaClient) {}
 
   // ──────────────── Read methods ────────────────
@@ -60,6 +60,15 @@ export class PostgresStore implements DataStore {
       const { db_id: _, ...rest } = row;
       return stripNulls(rest);
     });
+  }
+
+  // AdminDataStore — раздел 9.1 ТЗ. Distinct по PK — без выгрузки строк в память.
+  async getAllTenants(): Promise<string[]> {
+    const rows: { tenant_id: string }[] = await this.client.businessFoundation.findMany({
+      select: { tenant_id: true },
+      distinct: ['tenant_id'],
+    });
+    return rows.map((r) => r.tenant_id);
   }
 
   async getScoutJobs(tenantId: string): Promise<ScoutJob[]> {
