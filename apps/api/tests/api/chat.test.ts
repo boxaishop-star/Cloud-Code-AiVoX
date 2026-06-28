@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 
 // ── Research finding: createSignInToken is NOT usable as Bearer token ─────────
@@ -52,6 +52,14 @@ const canRunE2E =
   !!process.env.ANTHROPIC_API_KEY &&
   !!process.env.DATABASE_URL &&
   !!process.env.TEST_CLERK_USER_ID;
+
+// Очищаем состояние ДО теста — карточки от предыдущих прогонов (e2e-скриптов,
+// ручных curl-тестов и т.д.) заставляют Claude предлагать update вместо upsert.
+beforeAll(async () => {
+  if (!canRunE2E) return;
+  const client = getPrismaClient();
+  await client.productCard.deleteMany({ where: { tenant_id: TENANT_ID } }).catch(() => {});
+});
 
 afterAll(async () => {
   if (!canRunE2E) return;

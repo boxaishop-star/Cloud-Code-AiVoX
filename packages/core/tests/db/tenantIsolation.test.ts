@@ -120,4 +120,59 @@ describe('PostgresStore — tenant isolation', () => {
     expect(cards[0].price).toBe(2000);
     expect(cards[0].name).toBe('Маникюр классический');
   });
+
+  it('update_product_card частично обновляет карточку, остальные поля сохраняются', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
+
+    // Сначала создаём карточку с includes
+    await storeA.applyAction({
+      type: 'upsert_product_card',
+      payload: {
+        tenant_id: TENANT_A,
+        id: 'card_upd',
+        name: 'Педикюр классический',
+        category: 'beauty',
+        service_line: 'pedicure_classic',
+        pricing_model: 'fixed',
+        price: 1200,
+        currency: 'RUB',
+        includes: ['обработка стопы', 'покрытие'],
+      },
+    });
+
+    // Частичное обновление — только цена
+    const result = await storeA.applyAction({
+      type: 'update_product_card',
+      payload: {
+        tenant_id: TENANT_A,
+        service_line: 'pedicure_classic',
+        price: 1800,
+      },
+    });
+    expect(result.applied).toBe(true);
+
+    const cards = await storeA.getProductCards(TENANT_A);
+    const updated = cards.find((c) => c.service_line === 'pedicure_classic');
+    expect(updated?.price).toBe(1800);
+    // Поля, не переданные в update, должны остаться нетронутыми
+    expect(updated?.name).toBe('Педикюр классический');
+    expect(updated?.includes).toEqual(['обработка стопы', 'покрытие']);
+  });
+
+  it('update_product_card на несуществующую карточку возвращает понятную ошибку', async (ctx) => {
+    if (!dbAvailable) return ctx.skip();
+
+    const result = await storeA.applyAction({
+      type: 'update_product_card',
+      payload: {
+        tenant_id: TENANT_A,
+        service_line: 'does_not_exist_xyz',
+        price: 999,
+      },
+    });
+    expect(result.applied).toBe(false);
+    expect(result.error).toMatch(/not found/i);
+    expect(result.error).toContain('does_not_exist_xyz');
+    expect(result.error).toMatch(/upsert_product_card/);
+  });
 }, 30000);

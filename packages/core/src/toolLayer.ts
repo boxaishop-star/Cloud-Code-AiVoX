@@ -46,6 +46,24 @@ export class InMemoryStore implements DataStore {
           this.productCards.set(tenantId, list);
           return Promise.resolve({ action: { ...action, payload: normalized }, applied: true });
         }
+        case "update_product_card": {
+          const tenantId = (action.payload as any).tenant_id as string;
+          const serviceLine = (action.payload as any).service_line as string;
+          const list = this.productCards.get(tenantId) ?? [];
+          const idx = list.findIndex((c) => c.service_line === serviceLine);
+          if (idx < 0) {
+            return Promise.resolve({
+              action,
+              applied: false,
+              error: `ProductCard not found for service_line '${serviceLine}' — use upsert_product_card to create it first`,
+            });
+          }
+          const merged = { ...list[idx], ...action.payload };
+          const normalized = ProductCardSchema.parse(merged) as ProductCard;
+          list[idx] = normalized;
+          this.productCards.set(tenantId, list);
+          return Promise.resolve({ action: { ...action, payload: normalized }, applied: true });
+        }
         case "create_relationship_card": {
           const tenantId = (action.payload as any).tenant_id as string;
           const list = this.relationshipCards.get(tenantId) ?? [];

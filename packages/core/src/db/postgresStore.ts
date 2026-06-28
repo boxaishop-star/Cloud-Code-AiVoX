@@ -90,6 +90,30 @@ export class PostgresStore implements DataStore {
           return { action: { ...action, payload: normalized }, applied: true };
         }
 
+        case 'update_product_card': {
+          const p = action.payload as Record<string, unknown>;
+          const tenantId = p.tenant_id as string;
+          const serviceLine = p.service_line as string;
+
+          const existing: Record<string, unknown> | null =
+            await this.client.productCard.findFirst({
+              where: { tenant_id: tenantId, service_line: serviceLine },
+            });
+          if (!existing) {
+            return {
+              action,
+              applied: false,
+              error: `ProductCard not found for service_line '${serviceLine}' — use upsert_product_card to create it first`,
+            };
+          }
+          const normalized = ProductCardSchema.parse({ ...fromPrismaCard(existing), ...p });
+          await this.client.productCard.update({
+            where: { tenant_service_line: { tenant_id: tenantId, service_line: serviceLine } },
+            data: normalized,
+          });
+          return { action: { ...action, payload: normalized }, applied: true };
+        }
+
         case 'create_relationship_card': {
           const p = action.payload as Record<string, unknown>;
           await this.client.relationshipCard.create({ data: p });

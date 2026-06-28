@@ -26,30 +26,32 @@ export function validateProposedActions(
   const validActions: ToolAction[] = [];
 
   for (const action of actions) {
-    if (action.type === "upsert_product_card") {
+    if (action.type === "upsert_product_card" || action.type === "update_product_card") {
       const { name, category, service_line, price } = action.payload as Record<string, unknown>;
 
       // Правило раздела 8.1, 2.2 ТЗ: категория не может быть услугой.
       if (typeof name === "string" && existingCategories.some((c) => c.toLowerCase() === name.toLowerCase())) {
-        errors.push(`Отклонено upsert_product_card: name="${name}" совпадает с известной категорией — категория не может быть услугой (раздел 8.1 ТЗ)`);
+        errors.push(`Отклонено ${action.type}: name="${name}" совпадает с известной категорией — категория не может быть услугой (раздел 8.1 ТЗ)`);
         continue;
       }
       if (typeof category === "string" && typeof name === "string" && category.toLowerCase() === name.toLowerCase()) {
-        errors.push(`Отклонено upsert_product_card: category и name совпадают ("${name}") — это признак того, что категория записывается как услуга`);
+        errors.push(`Отклонено ${action.type}: category и name совпадают ("${name}") — это признак того, что категория записывается как услуга`);
         continue;
       }
 
-      // Запрет дублей по service_line в рамках тенанта (раздел 19 ТЗ).
       if (typeof service_line === "string") {
-        const dupes = existingProductCards.filter((c) => c.service_line === service_line && c.tenant_id === (action.payload as any).tenant_id);
-        if (dupes.length > 1) {
-          errors.push(`Отклонено upsert_product_card: дубль service_line="${service_line}" в рамках тенанта`);
-          continue;
+        // Запрет дублей по service_line — только для upsert (update требует наличия записи).
+        if (action.type === "upsert_product_card") {
+          const dupes = existingProductCards.filter((c) => c.service_line === service_line && c.tenant_id === (action.payload as any).tenant_id);
+          if (dupes.length > 1) {
+            errors.push(`Отклонено upsert_product_card: дубль service_line="${service_line}" в рамках тенанта`);
+            continue;
+          }
         }
-        // Запрет перезаписи точной цены более общим/нулевым значением.
+        // Запрет перезаписи точной цены более общим/нулевым значением (раздел 19 ТЗ).
         const existing = existingProductCards.find((c) => c.service_line === service_line);
         if (existing && typeof existing.price === "number" && existing.price > 0 && price === 0) {
-          errors.push(`Отклонено upsert_product_card: попытка перезаписать точную цену (${existing.price}) на 0 для service_line="${service_line}" — раздел 19 ТЗ ("не перезаписывать точные данные более общими")`);
+          errors.push(`Отклонено ${action.type}: попытка перезаписать точную цену (${existing.price}) на 0 для service_line="${service_line}" — раздел 19 ТЗ ("не перезаписывать точные данные более общими")`);
           continue;
         }
       }
