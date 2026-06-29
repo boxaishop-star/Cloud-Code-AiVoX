@@ -24,7 +24,7 @@ const DRAFT_TOOL: Anthropic.Tool = {
       message: {
         type: 'string',
         description:
-          '1–3 sentences. Warm and personal, in Russian. References what the person said or needs. No corporate tone. No salesy phrases. Do not start with "Здравствуйте".',
+          '1–3 sentences. Warm and natural, in Russian. Engage on the topic the lead cares about. No corporate tone. No salesy phrases. Do not start with "Здравствуйте". Do NOT phrase the message as confirming you saw their post or have been watching them.',
       },
     },
   },
@@ -69,8 +69,9 @@ function buildSystemPrompt(foundation: BusinessFoundation | undefined): string {
     '  • Tone: warm, human, 1–3 sentences.',
     '  • Write as the business owner, not as an AI.',
     '  • NEVER reveal you are AI or mention "Avi".',
-    '  • Do NOT invent facts the business did not provide.',
-    '  • Reference what the lead said or needs to make the message feel personal.',
+    '  • FACTS ONLY: every specific detail in the message (price, location, hours, included services, etc.) MUST come verbatim from the Business context or offer fields below. Do not add any marketing claims, advantages, or details not explicitly present in the provided data — even if they seem plausible.',
+    '  • Do NOT phrase the message as confirming you have seen the lead\'s specific post or have been watching them. Do NOT use constructions like "видел, что ты", "заметил твой пост", "вижу, что ты ищешь" or any equivalent. Write as a natural topic-relevant introduction, not as surveillance confirmation.',
+    '  • NO INVENTED AVAILABILITY: do not assert any specific time availability — no "завтра", "сегодня", "прямо сейчас", "свежее место", "уже есть слот", "запишем сразу" or any claim that a specific slot exists. If the data contains no structured availability information, the message may only invite the lead to discuss a convenient time — never assert it.',
     '',
   ];
 

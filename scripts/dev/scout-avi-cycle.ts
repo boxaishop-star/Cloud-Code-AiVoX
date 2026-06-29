@@ -23,46 +23,88 @@ import { ClaudeDraftProvider } from '../../packages/core/src/avi/draftProvider.j
 import type { RelationshipCard } from '../../packages/core/src/schemas/relationshipCard.js';
 import type { ProductCard } from '../../packages/core/src/schemas/productCard.js';
 
-// ── readline helper ───────────────────────────────────────────────────────────
+// ── Input abstraction ──────────────────────────────────────────────────────
+//
+// Проблема: readline обрабатывает 'line'-события синхронно при получении
+// чанка. Если весь пайп приходит сразу, все события сгорают до того, как
+// следующий rl.question() успевает зарегистрировать слушатель.
+// Решение: если stdin — не TTY (pipe/redirect), читаем всё заранее в массив.
 
-const rl = createInterface({ input: process.stdin, output: process.stdout });
+async function makeInputReader() {
+  if (process.stdin.isTTY) {
+    // ── Интерактивный режим: readline question ────────────────────────────
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    return {
+      nextLine(prompt?: string): Promise<string> {
+        return new Promise((resolve) =>
+          rl.question(prompt ?? '', (a) => resolve(a.replace(/\r$/, '').trim())),
+        );
+      },
+      close() { rl.close(); },
+    };
+  }
 
-function ask(prompt: string): Promise<string> {
-  return new Promise((resolve) => rl.question(prompt, (a) => resolve(a.trim())));
+  // ── Нон-интерактивный режим (pipe, тестирование): читаем stdin целиком ──
+  const raw = await new Promise<string>((resolve) => {
+    let buf = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk: string) => { buf += chunk; });
+    process.stdin.on('end', () => resolve(buf));
+    process.stdin.resume();
+  });
+  const lines = raw.split('\n').map((l) => l.replace(/\r$/, '').trim());
+  let idx = 0;
+
+  return {
+    nextLine(prompt?: string): Promise<string> {
+      if (prompt) process.stdout.write(prompt);
+      const line = idx < lines.length ? lines[idx++] : '';
+      process.stdout.write(line + '\n'); // echo для читаемости вывода
+      return Promise.resolve(line);
+    },
+    close() {},
+  };
 }
 
-// ── detected_need extraction (эвристика — LLM здесь не нужен) ────────────────
+// ── detected_need (эвристика — LLM не нужен) ──────────────────────────────
 
 function extractDetectedNeed(rawText: string): string {
   return rawText.slice(0, 300).trim();
 }
 
-// ── main ─────────────────────────────────────────────────────────────────────
+// ── main ──────────────────────────────────────────────────────────────────
 
 async function main() {
   console.log('\n=== Scout→Avi цикл (ручная проверка) ===\n');
 
-  // 1. Tenant
-  const tenantRaw = await ask('tenant_id [manual_test_1]: ');
-  const tenantId = tenantRaw || 'manual_test_1';
+  const input = await makeInputReader();
 
-  // 2. Исходное сообщение (имитация того, что Scout нашёл в канале)
+  // 1. Tenant
+  const tenantRaw = await input.nextLine('tenant_id [scout_avi_demo]: ');
+  const tenantId = tenantRaw || 'scout_avi_demo';
+  console.log(`[debug] tenantId=${tenantId}`);
+
+  // 2. Исходное сообщение
   console.log('\nВставьте текст сообщения, как будто нашли его в канале.');
   console.log('(пустая строка = конец ввода)\n');
-  const lines: string[] = [];
+
+  const msgLines: string[] = [];
   while (true) {
-    const line = await ask('> ');
+    const line = await input.nextLine('> ');
     if (line === '') break;
-    lines.push(line);
+    msgLines.push(line);
   }
-  const rawMessage = lines.join('\n').trim();
+  const rawMessage = msgLines.join('\n').trim();
+  console.log(`[debug] rawMessage собран (${rawMessage.length} chars): "${rawMessage.slice(0, 60)}..."`);
+
   if (!rawMessage) {
     console.log('Текст пустой, выход.');
-    rl.close();
+    input.close();
     return;
   }
 
   // 3. Создаём RelationshipCard
+  console.log('[debug] createPrismaClient...');
   const client = createPrismaClient();
   const store = new PostgresStore(client);
   const cardId = randomUUID();
@@ -81,6 +123,7 @@ async function main() {
     handoff_required: false,
   };
 
+  console.log('[debug] store.applyAction(create_relationship_card)...');
   const createResult = await store.applyAction({
     type: 'create_relationship_card',
     payload: cardPayload,
@@ -88,25 +131,26 @@ async function main() {
 
   if (!createResult.applied) {
     console.error('Ошибка создания карточки:', createResult.error);
-    rl.close();
+    input.close();
     await client.$disconnect();
     return;
   }
   console.log(`\n✓ RelationshipCard создана (id=${cardId})\n`);
 
   // 4. Загружаем контекст тенанта
+  console.log('[debug] загружаю foundation + productCards...');
   const [foundation, productCards] = await Promise.all([
     store.getFoundation(tenantId),
     store.getProductCards(tenantId),
   ]);
+  console.log(`[debug] foundation=${!!foundation}, productCards=${productCards.length}`);
 
-  // Берём первую доступную карточку как "релевантную услугу"
   const productCard: ProductCard | undefined = productCards[0];
-
-  if (!foundation) console.warn('⚠ BusinessFoundation не найдена для тенанта, черновик будет без контекста бизнеса.');
+  if (!foundation) console.warn('⚠ BusinessFoundation не найдена, черновик будет без контекста бизнеса.');
   if (!productCard) console.warn('⚠ ProductCard не найдена, черновик будет без описания услуги.');
 
   // 5. Генерируем черновик
+  console.log('[debug] вызываю ClaudeDraftProvider.draft()...');
   console.log('Генерирую черновик через Avi...\n');
   const draftProvider = new ClaudeDraftProvider();
 
@@ -114,9 +158,10 @@ async function main() {
   try {
     const result = await draftProvider.draft(cardPayload, productCard, foundation);
     draftText = result.message;
+    console.log('[debug] черновик получен от Claude');
   } catch (err) {
     console.error('Ошибка генерации черновика:', err);
-    rl.close();
+    input.close();
     await client.$disconnect();
     return;
   }
@@ -127,7 +172,7 @@ async function main() {
     console.log(draftText);
     console.log('────────────────────────────────────────────────────\n');
 
-    const answer = (await ask('Отправить? (y / n / edit): ')).toLowerCase();
+    const answer = (await input.nextLine('Отправить? (y / n / edit): ')).toLowerCase();
 
     if (answer === 'y') {
       // interaction_history не реализован в схеме — логируем факт
@@ -145,25 +190,23 @@ async function main() {
       console.log('\nВведите свой текст (пустая строка = конец ввода):');
       const editLines: string[] = [];
       while (true) {
-        const ln = await ask('> ');
+        const ln = await input.nextLine('> ');
         if (ln === '') break;
         editLines.push(ln);
       }
       const edited = editLines.join('\n').trim();
       if (edited) draftText = edited;
-      // Повторяем цикл с новым текстом
       continue;
     }
 
     console.log('Введите y, n или edit.');
   }
 
-  rl.close();
+  input.close();
   await client.$disconnect();
 }
 
 main().catch((err) => {
   console.error('Критическая ошибка:', err);
-  rl.close();
   process.exit(1);
 });
