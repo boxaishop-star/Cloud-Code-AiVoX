@@ -16,6 +16,10 @@ export interface ExtractionContext {
   productCatalog: Record<string, unknown>[];
   activeServiceLine?: string;
   activeFactId?: string;
+  /** Current onboarding stage (раздел 7.1.1 ТЗ v9.0). */
+  assistant_stage?: 'profile_setup' | 'daily_assistant';
+  /** Fields still missing from the best product card — passed so the model knows what to ask next. */
+  missing_fields?: string[];
 }
 
 export interface ExtractionResult {

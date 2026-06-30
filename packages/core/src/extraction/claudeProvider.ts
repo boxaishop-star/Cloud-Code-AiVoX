@@ -118,10 +118,9 @@ const EXTRACTION_TOOL: Anthropic.Tool = {
       clarification_text: {
         type: 'string',
         description:
-          'REQUIRED when proposed_actions is empty. Write a direct, contextual reply to the user in Russian: ' +
-          'if they said "в смысле?" or "подскажи" — rephrase or explain what was asked before; ' +
-          'if they are confused — give a concrete example relevant to their business; ' +
-          'if they asked a meta-question — answer it. Never repeat the same generic prompt.',
+          'REQUIRED when proposed_actions is empty. Write a SHORT (2-3 sentences), direct, conversational reply in Russian. ' +
+          'NO markdown: no **bold**, no bullet lists with dashes or asterisks, no headers. ' +
+          'Plain text only. Address exactly what the user said — do not enumerate the whole catalog.',
       },
     },
   },
@@ -186,6 +185,7 @@ export class ClaudeExtractionProvider implements ExtractionProvider {
 }
 
 function buildSystemPrompt(context: ExtractionContext): string {
+  const stage = context.assistant_stage ?? 'profile_setup';
   const foundation =
     Object.keys(context.businessFoundation).length > 0
       ? JSON.stringify(context.businessFoundation, null, 2)
@@ -196,10 +196,44 @@ function buildSystemPrompt(context: ExtractionContext): string {
       : '(empty)';
 
   const lines: string[] = [
-    'You are a business-setup assistant for small businesses in Russia.',
+    'You are Business Assistant for small businesses in Russia.',
     'User messages are written in Russian — this is expected and normal, NOT a parsing error.',
     'The system serves any industry: beauty, repair, consulting, construction, food, etc.',
     '',
+  ];
+
+  if (stage === 'daily_assistant') {
+    buildDailyAssistantPrompt(lines, context, foundation, catalog);
+  } else {
+    buildProfileSetupPrompt(lines, context, foundation, catalog);
+  }
+
+  return lines.join('\n');
+}
+
+function buildProfileSetupPrompt(
+  lines: string[],
+  context: ExtractionContext,
+  foundation: string,
+  catalog: string,
+): void {
+  const missing = context.missing_fields ?? [];
+
+  lines.push(
+    '## Current stage: PROFILE SETUP (Этап A)',
+    'Help the user describe their business services and fill in a product card.',
+    '',
+  );
+
+  if (missing.length > 0) {
+    lines.push(
+      `## Already filled. Still missing from the best card: [${missing.join(', ')}]`,
+      'Use this list to ask the NEXT relevant question — do not re-ask what is already filled.',
+      '',
+    );
+  }
+
+  lines.push(
     '## Your task',
     'Analyse the user message and call extract_business_intent with:',
     '  • intent     — choose ONE:',
@@ -223,6 +257,9 @@ function buildSystemPrompt(context: ExtractionContext): string {
     '  service_line  — same value as id',
     '  pricing_model — pick the closest: "fixed" (per visit/item/hour), "from_price" (starting price),',
     '                  "per_m3" (volume-based, e.g. concrete), "custom" (complex/negotiated)',
+    '                  When pricing_model is "custom", ALSO fill estimate_inputs[] with 2-3 typical',
+    '                  parameters the user would need to quote a price (e.g. for renovation:',
+    '                  ["площадь квартиры", "тип ремонта"]; for consulting: ["объём задачи"]).',
     '',
     '### Optional payload fields — fill only when the user explicitly provided the value.',
     '### IMPORTANT: geography, customer_segments, includes, excludes, and all other list fields',
@@ -263,15 +300,17 @@ function buildSystemPrompt(context: ExtractionContext): string {
     '      "pricing_model": "custom" } }]',
     '',
     '## When proposed_actions is empty',
-    'If the user is confused, asks "в смысле?", "подскажи", "не понимаю", "как?", or says something',
-    'that cannot be mapped to a business action:',
-    '  • Set proposed_actions to []',
-    '  • Set clarification_text to a DIRECT, CONTEXTUAL reply in Russian that addresses exactly',
-    '    what the user said. Examples:',
-    '    - "в смысле?" → explain what the previous question was asking, then ask again',
-    '    - "подскажи" → give a concrete example matching their business type from the catalog',
-    '    - "мне сложно" → break the request into smaller steps, give an example first',
-    '    - Never return a generic "расскажите про услугу" if they are confused — they need help.',
+    'If the user is confused, asks "в смысле?", "подскажи", "не понимаю", "как?", or sends something',
+    'that cannot be mapped to a business action — set proposed_actions: [] and write clarification_text.',
+    '',
+    '  Rules for clarification_text:',
+    '  • 2-3 sentences MAX. Conversational Russian. NO markdown — no **, no dashes, no bullet lists.',
+    '  • Address exactly what the user said. Do NOT enumerate the whole catalog.',
+    `  • Next missing field: "${missing[0] ?? 'name'}". Use this to form one concrete follow-up question.`,
+    `  • "scout_signals" → ask: "По каким словам вас обычно ищут клиенты? Например: '${context.productCatalog[0]?.name ?? 'услуга'} [город]', 'найти мастера', 'заказать [услугу]'."`,
+    `  • "в смысле?" → explain in one sentence what was being asked, give one short example, re-ask.`,
+    `  • "подскажи/помоги" → one concrete example from their service type, then re-ask the question.`,
+    `  • Confused/off-topic → one short acknowledgement, then ask the next missing field directly.`,
     '',
     '## IMPORTANT',
     '  • Never include tenant_id in the payload — the system injects it automatically.',
@@ -280,7 +319,7 @@ function buildSystemPrompt(context: ExtractionContext): string {
     '',
     '---',
     `Tenant: ${context.tenant_id}`,
-  ];
+  );
 
   if (context.activeServiceLine) lines.push(`Active service line: ${context.activeServiceLine}`);
   if (context.activeFactId) lines.push(`Active fact ID: ${context.activeFactId}`);
@@ -293,6 +332,44 @@ function buildSystemPrompt(context: ExtractionContext): string {
     `Product catalog (${context.productCatalog.length} items):`,
     catalog,
   );
+}
 
-  return lines.join('\n');
+function buildDailyAssistantPrompt(
+  lines: string[],
+  context: ExtractionContext,
+  foundation: string,
+  catalog: string,
+): void {
+  lines.push(
+    '## Current stage: DAILY ASSISTANT (Этап B)',
+    'Profile setup is COMPLETE. Do NOT ask the user to describe their business or fill in a service card.',
+    '',
+    '## Your task in this mode',
+    'Analyse the user message and call extract_business_intent with:',
+    '  • intent     — one of "inquiry" | "product_update" | "business_setup" | "small_talk"',
+    '  • confidence — 0–1',
+    '  • proposed_actions — only if the user explicitly asks to add/change a service',
+    '  • next_step  — leave empty unless updating a card',
+    '',
+    '## Behaviour rules',
+    '  • If user asks about metrics, leads, revenue, activity → set proposed_actions: []',
+    '    and set clarification_text: 1-2 sentences, acknowledge + ask how you can help.',
+    '  • If user mentions a new service → create upsert_product_card as usual.',
+    '  • If user is confused → answer in clarification_text: 1-2 sentences, plain text.',
+    '  • If nothing fits → set clarification_text: "Слушаю — чем могу помочь?"',
+    '  • NO markdown in clarification_text: no **bold**, no bullet lists, no dashes.',
+    '',
+    '## IMPORTANT',
+    '  • Never include tenant_id in the payload.',
+    '  • In this mode the fallback phrase "Расскажите о вашей услуге..." is FORBIDDEN.',
+    '',
+    '---',
+    `Tenant: ${context.tenant_id}`,
+    '',
+    'Business foundation:',
+    foundation,
+    '',
+    `Product catalog (${context.productCatalog.length} items):`,
+    catalog,
+  );
 }

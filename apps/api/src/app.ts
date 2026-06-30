@@ -71,6 +71,49 @@ app.get('/api/admin/tenants', async (req, res) => {
   }
 });
 
+// Раздел 7.1.1 ТЗ v9.0: минимальная утренняя сводка для Daily Assistant (Этап B).
+// Реальные метрики Scout/Avi подключаются отдельно.
+app.get('/api/daily-summary', async (req, res) => {
+  const { userId } = getAuth(req);
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const user = await clerkClient.users.getUser(userId);
+  const rawTenantId = user.publicMetadata['tenant_id'];
+  if (typeof rawTenantId !== 'string' || !rawTenantId) {
+    res.status(400).json({ error: 'tenant_id not configured for this user' });
+    return;
+  }
+
+  try {
+    const store = new PostgresStore(getPrismaClient());
+    const [foundation, productCards, relationshipCards] = await Promise.all([
+      store.getFoundation(rawTenantId),
+      store.getProductCards(rawTenantId),
+      store.getRelationshipCards(rawTenantId),
+    ]);
+
+    // Readiness рассчитывается локально — не тратим вызов LLM.
+    const { computeReadiness } = await import('@aivox/core');
+    const bestReadiness = productCards.length > 0
+      ? Math.max(...productCards.map((c) => computeReadiness(c).readiness_score))
+      : 0;
+
+    res.json({
+      tenant_id: rawTenantId,
+      assistant_stage: (foundation as any)?.assistant_stage ?? 'profile_setup',
+      product_cards_count: productCards.length,
+      relationship_cards_count: relationshipCards.length,
+      readiness_score: bestReadiness,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
 app.post('/api/chat', async (req, res) => {
   // tenant_id берётся ИСКЛЮЧИТЕЛЬНО из Clerk publicMetadata — раздел 9 ТЗ.
   const { userId } = getAuth(req);

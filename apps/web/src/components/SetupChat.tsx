@@ -137,7 +137,7 @@ export default function SetupChat() {
 
       const data = (await res.json()) as {
         assistantResponse?: string;
-        nextStep?: string;
+        nextStep?: { id: string; question: string } | string;
         error?: string;
       };
 
@@ -146,12 +146,17 @@ export default function SetupChat() {
         return;
       }
 
+      // nextStep приходит как объект { id, question } из OrchestratorResult — берём только question.
+      const nextStepText = typeof data.nextStep === 'string'
+        ? data.nextStep
+        : data.nextStep?.question;
+
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
           content: data.assistantResponse ?? '',
-          nextStep: data.nextStep,
+          nextStep: nextStepText,
         },
       ]);
     } catch {

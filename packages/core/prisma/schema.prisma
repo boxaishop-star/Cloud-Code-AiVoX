@@ -12,6 +12,7 @@ datasource db {
 
 model BusinessFoundation {
   tenant_id           String  @id                    // один фундамент на тенанта
+  assistant_stage     String  @default("profile_setup")  // "profile_setup" | "daily_assistant"
   company_description String?
   business_type       String?
   market_type         String?                        // "B2B" | "B2C" | "mixed"
