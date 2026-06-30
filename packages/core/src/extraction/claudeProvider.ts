@@ -115,6 +115,14 @@ const EXTRACTION_TOOL: Anthropic.Tool = {
         },
         description: 'Optional follow-up clarification to request from the user',
       },
+      clarification_text: {
+        type: 'string',
+        description:
+          'REQUIRED when proposed_actions is empty. Write a direct, contextual reply to the user in Russian: ' +
+          'if they said "в смысле?" or "подскажи" — rephrase or explain what was asked before; ' +
+          'if they are confused — give a concrete example relevant to their business; ' +
+          'if they asked a meta-question — answer it. Never repeat the same generic prompt.',
+      },
     },
   },
 };
@@ -147,6 +155,7 @@ export class ClaudeExtractionProvider implements ExtractionProvider {
       confidence: number;
       proposed_actions: Array<{ type: string; payload: Record<string, unknown> }>;
       next_step?: { id: string; question: string };
+      clarification_text?: string;
     };
 
     const proposed_actions = (raw.proposed_actions ?? []).map((a) => {
@@ -171,6 +180,7 @@ export class ClaudeExtractionProvider implements ExtractionProvider {
       confidence: raw.confidence,
       proposed_actions,
       next_step: raw.next_step,
+      clarification_text: raw.clarification_text,
     };
   }
 }
@@ -251,6 +261,17 @@ function buildSystemPrompt(context: ExtractionContext): string {
     '      "id": "tax_consult_ip", "name": "Консультация по налогам для ИП",',
     '      "category": "Юридические и финансовые услуги", "service_line": "tax_consult_ip",',
     '      "pricing_model": "custom" } }]',
+    '',
+    '## When proposed_actions is empty',
+    'If the user is confused, asks "в смысле?", "подскажи", "не понимаю", "как?", or says something',
+    'that cannot be mapped to a business action:',
+    '  • Set proposed_actions to []',
+    '  • Set clarification_text to a DIRECT, CONTEXTUAL reply in Russian that addresses exactly',
+    '    what the user said. Examples:',
+    '    - "в смысле?" → explain what the previous question was asking, then ask again',
+    '    - "подскажи" → give a concrete example matching their business type from the catalog',
+    '    - "мне сложно" → break the request into smaller steps, give an example first',
+    '    - Never return a generic "расскажите про услугу" if they are confused — they need help.',
     '',
     '## IMPORTANT',
     '  • Never include tenant_id in the payload — the system injects it automatically.',

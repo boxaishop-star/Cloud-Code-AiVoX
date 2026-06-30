@@ -77,7 +77,7 @@ export class BusinessAssistantOrchestrator {
     const nextStep = updatedCard ? computeNextStep(updatedCard) : extraction.next_step;
 
     return {
-      assistantResponse: this.renderResponse(extraction.intent, updatedCard, appliedActions, nextStep),
+      assistantResponse: this.renderResponse(extraction.intent, updatedCard, appliedActions, nextStep, extraction.clarification_text),
       responseSource: "business_assistant_orchestrator",
       appliedActions,
       rejectedActions: [...errors, ...toolLayerErrors],
@@ -94,9 +94,10 @@ export class BusinessAssistantOrchestrator {
   // Раздел 20.2, 22.2 ТЗ: ответ собирается из реальных сохранённых данных через
   // sanitizeForResponse — поэтому "[object Object]" архитектурно невозможен здесь,
   // а не "проверяется тестом постфактум".
-  private renderResponse(intent: string, card: ProductCard | undefined, applied: ToolActionResult[], nextStep?: NextStep): string {
+  private renderResponse(intent: string, card: ProductCard | undefined, applied: ToolActionResult[], nextStep?: NextStep, clarificationText?: string): string {
     if (!card) {
-      return "Понял. Расскажите подробнее про услугу, которую настраиваем — название, цену и что входит в стоимость.";
+      return clarificationText
+        ?? 'Расскажите о вашей услуге: название, цену и что входит в стоимость — например, «Маникюр, 1500 рублей, входит снятие лака».';
     }
     const lines: string[] = [];
     lines.push(`Понял. Создал и заполнил карточку «${sanitizeForResponse(card.name)}».`);
