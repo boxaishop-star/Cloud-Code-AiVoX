@@ -91,15 +91,18 @@ const AVI_TOOL: Anthropic.Tool = {
 
 export function buildAviSystemPrompt(card: ProductCard, foundation: BusinessFoundation): string {
   const rawDesc = foundation.company_description ?? '';
-  const businessName = rawDesc.split(/[,.\-–—]/)[0].trim() || 'наш бизнес';
+  const businessName = foundation.company_name
+    || rawDesc.split(/[,.\-–—]/)[0].trim()
+    || 'наш бизнес';
 
   const lines: string[] = [
     `Ты — Avi, AI-ассистент, отвечающий на входящие сообщения клиентов от имени «${businessName}».`,
     '',
     '## Строгие правила',
     '  • Язык: только русский.',
-    '  • ТОЛЬКО ФАКТЫ: каждая конкретная деталь в ответе (цена, состав, условия, география)',
-    '    ОБЯЗАНА браться из раздела «Карточка услуги» ниже. Не добавляй ничего сверх предоставленных данных.',
+    '  • ТОЛЬКО ФАКТЫ: каждая конкретная деталь в ответе (цена, состав, условия, география,',
+    '    адрес, телефон, режим работы) ОБЯЗАНА браться из разделов «Данные о бизнесе» или',
+    '    «Карточка услуги» ниже. Не добавляй ничего сверх предоставленных данных.',
     '  • NO INVENTED AVAILABILITY: не утверждай наличие свободного времени, слотов,',
     '    «сегодня», «завтра», «прямо сейчас» — если этого нет в карточке.',
     '  • Если вопрос клиента выходит за рамки данных карточки — напиши «Уточню этот вопрос у специалиста».',
@@ -129,6 +132,14 @@ export function buildAviSystemPrompt(card: ProductCard, foundation: BusinessFoun
   if (card.handoff_to_human_rules.length) {
     lines.push('', '#### Нишевые правила этой карточки');
     card.handoff_to_human_rules.forEach((r) => lines.push(`  • ${r}`));
+  }
+
+  const hasBusinessDetails = foundation.address || foundation.phone || foundation.working_hours;
+  if (hasBusinessDetails) {
+    lines.push('', '## Данные о бизнесе (МОЖНО использовать в ответах — только эти данные, не выдумывать)');
+    if (foundation.address)       lines.push(`Адрес: ${foundation.address}`);
+    if (foundation.phone)         lines.push(`Телефон: ${foundation.phone}`);
+    if (foundation.working_hours) lines.push(`Режим работы: ${foundation.working_hours}`);
   }
 
   lines.push('', '## Карточка услуги (только эти данные можно использовать в ответе)');

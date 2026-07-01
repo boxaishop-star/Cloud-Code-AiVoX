@@ -1,7 +1,7 @@
 /**
- * Интеграционный тест ClaudeAviConversationEngine — реальный Haiku (раздел 7.2, 20.1 ТЗ v9.1).
+ * Интеграционный тест ClaudeAviConversationEngine — реальный Haiku (раздел 7.2, 10, 20.1 ТЗ v9.1).
  *
- * Цель: анти-галлюцинация на живой модели.
+ * Цель: анти-галлюцинация на живой модели + использование данных бизнеса из foundation.
  * Запускается только при наличии ANTHROPIC_API_KEY.
  */
 import { describe, it, expect } from 'vitest';
@@ -93,6 +93,28 @@ describe('ClaudeAviConversationEngine (integration — реальный Haiku)',
       expect(result.loggedFacts.length).toBeGreaterThan(0);
       // productCardVersion должна совпадать с updated_at
       expect(result.loggedFacts[0].productCardVersion).toBe('2026-06-15T08:00:00.000Z');
+    },
+    30000,
+  );
+
+  it.skipIf(skipIfNoKey)(
+    'часы работы из foundation: ответ содержит конкретные часы, не «уточню у специалиста»',
+    async () => {
+      const foundationWithHours: BusinessFoundation = {
+        ...FOUNDATION,
+        working_hours: 'пн-пт 10:00–18:00, сб 11:00–16:00',
+      };
+      const engine = new ClaudeAviConversationEngine();
+      const result = await engine.respond(
+        'До скольки вы работаете сегодня?',
+        [],
+        CARD,
+        foundationWithHours,
+      );
+      // Должен ответить конкретными часами из foundation, не перенаправлять
+      expect(result.message).toMatch(/10:00|18:00|11:00|16:00/);
+      expect(result.message).not.toMatch(/уточню у специалиста/i);
+      expect(result.handoffTriggered).toBe(false);
     },
     30000,
   );

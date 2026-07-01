@@ -404,4 +404,75 @@ describe("Golden Construction: groupPlanIntoSections (раздел 7.1.2 ТЗ v9
     const sections = groupPlanIntoSections(plan, { readyToLaunch: ready, stage: "profile_setup" });
     expect(sections.find((s) => s.id === "launch")!.status).toBe("current");
   });
+
+  it("foundationExtras: адрес=upcoming, телефон=upcoming, режим работы=upcoming без данных", async () => {
+    const { store, orch } = makeOrch();
+    await runHods(orch, MSG.h1, MSG.h2, MSG.h3);
+    const [card] = await store.getProductCards(TENANT);
+    const foundation = await store.getFoundation(TENANT);
+    const { plan } = computeReadiness(card);
+    const sections = groupPlanIntoSections(plan, { foundation: foundation ?? undefined });
+    const businessSection = sections.find((s) => s.id === "business")!;
+    expect(businessSection.foundationExtras).toBeDefined();
+    expect(businessSection.foundationExtras!.find((e) => e.id === "address")!.status).toBe("upcoming");
+    expect(businessSection.foundationExtras!.find((e) => e.id === "phone")!.status).toBe("upcoming");
+    expect(businessSection.foundationExtras!.find((e) => e.id === "working_hours")!.status).toBe("upcoming");
+  });
+});
+
+// ── Business Foundation: company_name ─────────────────────────────────────────
+
+describe("Golden Construction: company_name в Business Foundation (раздел 10 ТЗ v9.1)", () => {
+  it("сообщение с названием компании → foundation.company_name сохранён", async () => {
+    const COMPANY_FIXTURE: Record<string, Partial<ExtractionResult>> = {
+      "СтройМонолит": {
+        intent: "business_setup",
+        confidence: 0.95,
+        proposed_actions: [
+          {
+            type: "upsert_business_foundation",
+            payload: {
+              company_name: "СтройМонолит",
+              company_description: "Монолитные работы — заливка перекрытий и фундаментов",
+              market_type: "B2C",
+            },
+          },
+        ],
+        clarification_text: "Понял. В каком городе работает СтройМонолит?",
+      },
+    };
+
+    const store = new InMemoryStore();
+    const extractor = new MockExtractionProvider(COMPANY_FIXTURE as any);
+    const orch = new BusinessAssistantOrchestrator(store, extractor);
+
+    await orch.process({ userMessage: "Мы — СтройМонолит, занимаемся монолитными работами", tenant_id: TENANT });
+    const foundation = await store.getFoundation(TENANT) as any;
+    expect(foundation?.company_name).toBe("СтройМонолит");
+    expect(foundation?.company_description).toContain("Монолитные");
+  });
+
+  it("foundationExtras: working_hours=done когда поле заполнено через upsert", async () => {
+    const store = new InMemoryStore();
+    await store.applyAction({
+      type: "upsert_business_foundation",
+      payload: {
+        tenant_id: TENANT,
+        company_description: "Монолитные работы",
+        market_type: "B2C",
+        geography: ["Москва"],
+        working_hours: "пн-пт 8:00–18:00",
+        address: "Москва, ул. Строителей, 1",
+        phone: "+7 999 000-00-00",
+      },
+    });
+    const foundation = await store.getFoundation(TENANT);
+    // Любая карточка для groupPlanIntoSections
+    const plan: import("../../src/nextStepController.js").SetupPlanItem[] = [];
+    const sections = groupPlanIntoSections(plan, { foundation: foundation ?? undefined });
+    const businessSection = sections.find((s) => s.id === "business")!;
+    expect(businessSection.foundationExtras!.find((e) => e.id === "working_hours")!.status).toBe("done");
+    expect(businessSection.foundationExtras!.find((e) => e.id === "address")!.status).toBe("done");
+    expect(businessSection.foundationExtras!.find((e) => e.id === "phone")!.status).toBe("done");
+  });
 });

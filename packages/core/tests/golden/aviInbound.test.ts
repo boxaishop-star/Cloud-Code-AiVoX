@@ -192,6 +192,56 @@ describe('Golden Avi: buildAviSystemPrompt (детерминированные)'
   });
 });
 
+// ── Тесты данных бизнеса из foundation (address/working_hours) ───────────────
+
+describe('Golden Avi: buildAviSystemPrompt — данные бизнеса из foundation', () => {
+  const FOUNDATION_WITH_DETAILS: BusinessFoundation = {
+    ...FOUNDATION,
+    company_name: 'Студия Ногтей',
+    address: 'Москва, ул. Тверская, 15, оф. 3',
+    working_hours: 'пн-пт 10:00–19:00, сб 11:00–17:00',
+  };
+
+  it('промпт содержит working_hours из foundation', () => {
+    const prompt = buildAviSystemPrompt(BASE_CARD, FOUNDATION_WITH_DETAILS);
+    expect(prompt).toContain('пн-пт 10:00–19:00');
+    expect(prompt).toContain('сб 11:00–17:00');
+  });
+
+  it('промпт содержит address из foundation', () => {
+    const prompt = buildAviSystemPrompt(BASE_CARD, FOUNDATION_WITH_DETAILS);
+    expect(prompt).toContain('Тверская, 15');
+  });
+
+  it('промпт использует company_name как имя бизнеса', () => {
+    const prompt = buildAviSystemPrompt(BASE_CARD, FOUNDATION_WITH_DETAILS);
+    expect(prompt).toContain('Студия Ногтей');
+  });
+
+  it('промпт без address/working_hours — секция не добавляется', () => {
+    const prompt = buildAviSystemPrompt(BASE_CARD, FOUNDATION);
+    expect(prompt).not.toContain('Адрес:');
+    expect(prompt).not.toContain('Режим работы:');
+  });
+
+  it.skipIf(skipIfNoKey)(
+    'реальный Haiku: «до скольки работаете?» → ответ из working_hours, не «уточню у специалиста»',
+    async () => {
+      const engine = new ClaudeAviConversationEngine();
+      const result = await engine.respond(
+        'До скольки вы работаете сегодня?',
+        [],
+        BASE_CARD,
+        FOUNDATION_WITH_DETAILS,
+      );
+      expect(result.message).toMatch(/10:00|19:00|11:00|17:00/);
+      expect(result.message).not.toMatch(/уточню у специалиста/i);
+      expect(result.handoffTriggered).toBe(false);
+    },
+    30000,
+  );
+});
+
 // ── Тесты фиксов: универсальный handoff + нормализация field ─────────────────
 
 describe('Golden Avi: универсальный handoff и нормализация logged_facts.field', () => {

@@ -220,6 +220,8 @@ export interface SectionSummary {
   label: string;
   status: NodeStatus;
   nodeIds: string[];
+  /** Необязательные поля foundation для секции "business" — видимы в UI, но не блокируют готовность. */
+  foundationExtras?: { id: string; label: string; status: 'done' | 'upcoming' }[];
 }
 
 export interface SetupPlanItem {
@@ -327,6 +329,7 @@ export function checkProfileReadyForDailyAssistant(
 export function computeFoundationSectionStatus(foundation?: BusinessFoundation): NodeStatus {
   if (
     isRealValue(foundation?.company_description) &&
+    isRealValue(foundation?.company_name) &&
     !!foundation?.market_type &&
     hasRealValue(foundation?.geography)
   ) return "done";
@@ -370,6 +373,11 @@ export function groupPlanIntoSections(
     label: "Бизнес",
     status: computeFoundationSectionStatus(opts?.foundation),
     nodeIds: [],
+    foundationExtras: [
+      { id: 'address',       label: 'Адрес',         status: opts?.foundation?.address       ? 'done' : 'upcoming' },
+      { id: 'phone',         label: 'Телефон',        status: opts?.foundation?.phone         ? 'done' : 'upcoming' },
+      { id: 'working_hours', label: 'Режим работы',   status: opts?.foundation?.working_hours ? 'done' : 'upcoming' },
+    ],
   });
 
   for (const def of SECTION_DEFS) {
