@@ -20,6 +20,16 @@ import {
 import type { ProductCard } from '../../src/schemas/productCard.js';
 import type { BusinessFoundation } from '../../src/schemas/businessFoundation.js';
 
+const VALID_FIELDS = [
+  'price',
+  'includes',
+  'excludes',
+  'estimate_inputs',
+  'geography',
+  'customer_segments',
+  'avi_qualification_questions',
+] as const;
+
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const BASE_CARD: ProductCard = {
@@ -82,6 +92,7 @@ describe('Golden Avi: структура AviResponse и versioning (детерм
     expect(result.message).toContain('2500');
     expect(result.loggedFacts).toHaveLength(1);
     expect(result.loggedFacts[0].field).toBe('price');
+    expect(VALID_FIELDS as readonly string[]).toContain(result.loggedFacts[0].field);
     expect(result.loggedFacts[0].value).toContain('2500');
     // updated_at не задан → версия = id карточки
     expect(result.loggedFacts[0].productCardVersion).toBe(BASE_CARD.id);
@@ -165,6 +176,56 @@ describe('Golden Avi: buildAviSystemPrompt (детерминированные)'
     expect(prompt).toContain('рассчитывается индивидуально');
     expect(prompt).not.toContain('2500');
   });
+
+  it('промпт содержит универсальное правило handoff на запрос звонка/встречи', () => {
+    const prompt = buildAviSystemPrompt(BASE_CARD, FOUNDATION);
+    // Универсальное правило должно быть в промпте независимо от нишевых правил
+    expect(prompt).toMatch(/позвон|перезвон/i);
+    expect(prompt).toMatch(/встрет/i);
+    expect(prompt).toMatch(/прямой контакт|человек.{0,20}мастер|мастер.{0,20}менеджер/i);
+  });
+
+  it('универсальное правило присутствует даже при пустых handoff_rules', () => {
+    const cardNoHandoff: ProductCard = { ...BASE_CARD, handoff_to_human_rules: [] };
+    const prompt = buildAviSystemPrompt(cardNoHandoff, FOUNDATION);
+    expect(prompt).toMatch(/позвон|перезвон/i);
+  });
+});
+
+// ── Тесты фиксов: универсальный handoff + нормализация field ─────────────────
+
+describe('Golden Avi: универсальный handoff и нормализация logged_facts.field', () => {
+  const FIXTURES_CALL = {
+    'Сколько стоит': {
+      message: 'Наращивание ногтей гелем стоит 2500 ₽.',
+      loggedFacts: [{ field: 'price', value: '2500 RUB' }],
+    },
+    'позвонить': {
+      message: 'Передаю ваш вопрос — совсем скоро ответят.',
+      handoffTriggered: true,
+      handoffReason: 'запрос прямого контакта',
+      loggedFacts: [],
+    },
+  };
+
+  // (а) — тест промпта: универсальное правило отражено в buildAviSystemPrompt
+  it('(а) buildAviSystemPrompt: запрос звонка/встречи упомянут как универсальное handoff-правило', () => {
+    // Карточка без нишевых handoff-правил — универсальное правило должно оставаться
+    const cardNoRules: ProductCard = { ...BASE_CARD, handoff_to_human_rules: [] };
+    const prompt = buildAviSystemPrompt(cardNoRules, FOUNDATION);
+    expect(prompt).toMatch(/позвон|перезвон/i);
+    expect(prompt).toMatch(/встрет/i);
+  });
+
+  // (б) — тест на нормализацию field: каждый fact.field строго из VALID_FIELDS
+  it('(б) loggedFacts.field строго из допустимого enum (VALID_FIELDS)', async () => {
+    const engine = new MockAviConversationEngine(FIXTURES_CALL);
+    const result = await engine.respond('Сколько стоит наращивание?', [], BASE_CARD, FOUNDATION);
+    expect(result.loggedFacts.length).toBeGreaterThan(0);
+    for (const f of result.loggedFacts) {
+      expect(VALID_FIELDS as readonly string[]).toContain(f.field);
+    }
+  });
 });
 
 // ── Поведенческие тесты на реальном Haiku ────────────────────────────────────
@@ -218,6 +279,34 @@ describe('Golden Avi: поведение ClaudeAviConversationEngine (Haiku)', (
       expect(result.message).not.toMatch(/2500|рублей/i);
       // loggedFacts пуст при handoff
       expect(result.loggedFacts).toHaveLength(0);
+    },
+    30000,
+  );
+
+  it.skipIf(skipIfNoKey)(
+    '(г) «можете позвонить?» без совпадения с нишевыми правилами → universalhandoffTriggered=true',
+    async () => {
+      // Карточка без нишевых handoff-правил — только универсальное правило должно сработать
+      const cardNoRules: ProductCard = { ...BASE_CARD, handoff_to_human_rules: [] };
+      const engine = new ClaudeAviConversationEngine();
+      const result = await engine.respond('Можете позвонить мне?', [], cardNoRules, FOUNDATION);
+
+      expect(result.handoffTriggered).toBe(true);
+      expect(result.loggedFacts).toHaveLength(0);
+    },
+    30000,
+  );
+
+  it.skipIf(skipIfNoKey)(
+    '(д) loggedFacts.field из реального Haiku — строго из VALID_FIELDS',
+    async () => {
+      const engine = new ClaudeAviConversationEngine();
+      const result = await engine.respond('Сколько стоит наращивание ногтей?', [], BASE_CARD, FOUNDATION);
+
+      expect(result.handoffTriggered).toBe(false);
+      for (const f of result.loggedFacts) {
+        expect(VALID_FIELDS as readonly string[]).toContain(f.field);
+      }
     },
     30000,
   );

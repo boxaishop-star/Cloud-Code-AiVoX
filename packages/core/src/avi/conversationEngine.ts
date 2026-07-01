@@ -65,7 +65,16 @@ const AVI_TOOL: Anthropic.Tool = {
           properties: {
             field: {
               type: 'string',
-              description: 'Product card field name, e.g. "price", "includes", "geography".',
+              enum: [
+                'price',
+                'includes',
+                'excludes',
+                'estimate_inputs',
+                'geography',
+                'customer_segments',
+                'avi_qualification_questions',
+              ],
+              description: 'Product card field name.',
             },
             value: {
               type: 'string',
@@ -98,19 +107,27 @@ export function buildAviSystemPrompt(card: ProductCard, foundation: BusinessFoun
     '  • Не раскрывай, что ты AI.',
     '  • Тон: доброжелательный, деловой, краткий (1–3 предложения).',
     '',
-    '## ПРАВИЛО ПЕРЕДАЧИ ДИАЛОГА (приоритет выше всего)',
-    '  handoff_triggered = true ИСКЛЮЧИТЕЛЬНО когда вопрос клиента по СМЫСЛУ совпадает',
-    '  с одним из явных правил из списка ниже. Вопрос вне карточки — НЕ является поводом',
-    '  для handoff_triggered = true.',
-    '  При срабатывании:',
-    '    1. handoff_triggered = true.',
-    '    2. message = ТОЛЬКО: «Передаю ваш вопрос — совсем скоро ответят».',
-    '    3. НЕ упоминай цену, состав, условия в этом message.',
-    '    4. logged_facts = [].',
+    '## ПРАВИЛА ПЕРЕДАЧИ ДИАЛОГА',
+    '',
+    '### Универсальное правило (абсолютный приоритет, действует для всех ниш)',
+    '  Если клиент просит позвонить, перезвонить, встретиться лично, поговорить',
+    '  с человеком/мастером/менеджером или иным способом запрашивает прямой контакт —',
+    '  handoff_triggered = true. Это правило НЕ требует совпадения с нишевыми правилами.',
+    '',
+    '### Нишевые правила (semantic match)',
+    '  handoff_triggered = true также когда вопрос клиента по СМЫСЛУ совпадает с одним из',
+    '  нишевых правил ниже. Вопрос вне карточки без совпадения с правилами —',
+    '  НЕ является поводом для handoff_triggered = true.',
+    '',
+    '### При срабатывании любого правила',
+    '  1. handoff_triggered = true.',
+    '  2. message = ТОЛЬКО: «Передаю ваш вопрос — совсем скоро ответят».',
+    '  3. НЕ упоминай цену, состав, условия в этом message.',
+    '  4. logged_facts = [].',
   ];
 
   if (card.handoff_to_human_rules.length) {
-    lines.push('', '## Явные правила передачи (semantic match)');
+    lines.push('', '#### Нишевые правила этой карточки');
     card.handoff_to_human_rules.forEach((r) => lines.push(`  • ${r}`));
   }
 
