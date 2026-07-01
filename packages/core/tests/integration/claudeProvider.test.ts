@@ -76,6 +76,41 @@ describe('ClaudeExtractionProvider (integration)', () => {
     30000,
   );
 
+  // ── Раздел 7.1.2, 25 ТЗ v9.1: bulk catalog creation ─────────────────────────
+
+  it.skipIf(skipIfNoKey)(
+    'bulk create: "все виды монолитных" → несколько upsert_product_card + clarification_text',
+    async () => {
+      const provider = new ClaudeExtractionProvider();
+      const result = await provider.extract(
+        'Занимаюсь всеми видами монолитных работ — фундаменты разных типов, дорожки, отмостки, армопояс, погреб',
+        {
+          tenant_id: 'integration_bulk_monolith',
+          businessFoundation: {
+            company_description: 'Монолитные работы — все виды бетонных конструкций',
+            market_type: 'B2C',
+            geography: ['Москва и Московская область'],
+          },
+          productCatalog: [],
+          assistant_stage: 'profile_setup',
+          missing_fields: [],
+          foundationComplete: true,
+          nichePack: NICHE_PACKS.monolithic_works,
+        },
+      );
+
+      const cardActions = result.proposed_actions.filter(
+        (a) => a.type === 'upsert_product_card' || a.type === 'update_product_card',
+      );
+      expect(cardActions.length).toBeGreaterThanOrEqual(3);
+      expect(result.clarification_text).toBeTruthy();
+      for (const action of cardActions) {
+        expect((action.payload as Record<string, unknown>).category).toBe('Строительство');
+      }
+    },
+    30000,
+  );
+
   // ── Раздел 6 ТЗ v9.1: изоляция ниш на реальном Claude ───────────────────────
 
   it.skipIf(skipIfNoKey)(

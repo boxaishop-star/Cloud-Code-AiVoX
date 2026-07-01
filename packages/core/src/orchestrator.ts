@@ -1,6 +1,6 @@
 import { classifyIntentLocally } from "./intentEngine.js";
 import { validateProposedActions, sanitizeForResponse } from "./validation.js";
-import { computeNextStep, computeReadiness, pickBestCard, resolveNichePack } from "./nextStepController.js";
+import { computeNextStep, computeReadiness, pickBestCard, pickNextCardInQueue, resolveNichePack, NICHE_SERVICE_CATALOGS } from "./nextStepController.js";
 import { isRealValue, hasRealValue } from "./utils/placeholders.js";
 import type { DataStore } from "./store.js";
 import type { ExtractionProvider } from "./extraction/types.js";
@@ -89,20 +89,26 @@ export class BusinessAssistantOrchestrator {
     // company_description + market_type + geography. Проверяется ДО extraction.
     const foundationComplete = isFoundationComplete(foundation);
 
-    // Активная услуга: либо передана UI явно, либо вычисляется как лучшая карточка в profile_setup.
-    const derivedActiveServiceLine = input.activeServiceLine
-      ?? (currentStage === "profile_setup"
-        ? pickBestCard(existingCards)?.service_line
-        : undefined);
-
-    // Передаём missing_fields лучшей карточки в контекст провайдера —
-    // модель точно знает, каких данных не хватает, и не повторяет одни вопросы.
+    // Нишевой пак и каталог — разрешаем до вычисления activeServiceLine.
     const bestExisting = pickBestCard(existingCards);
-    const { missing_fields: contextMissingFields } = bestExisting
-      ? computeReadiness(bestExisting)
+    const nichePack = resolveNichePack(bestExisting, foundation ?? undefined);
+    const catalog = NICHE_SERVICE_CATALOGS[nichePack.id];
+
+    // Каталожная очередь: первая незаполненная карточка из каталога ниши (раздел 25 ТЗ v9.1).
+    const activeQueueCard = catalog
+      ? (pickNextCardInQueue(existingCards, catalog) ?? bestExisting)
+      : bestExisting;
+
+    // Передаём missing_fields активной карточки (по каталогу или лучшей) в контекст провайдера.
+    const { missing_fields: contextMissingFields } = activeQueueCard
+      ? computeReadiness(activeQueueCard)
       : { missing_fields: [] };
 
-    const nichePack = resolveNichePack(bestExisting, foundation ?? undefined);
+    // Активная услуга: UI-приоритет, иначе — первая незаполненная в каталожной очереди.
+    const derivedActiveServiceLine = input.activeServiceLine
+      ?? (currentStage === "profile_setup"
+        ? activeQueueCard?.service_line
+        : undefined);
 
     const extraction = await this.extractor.extract(input.userMessage, {
       tenant_id: input.tenant_id,
@@ -155,8 +161,21 @@ export class BusinessAssistantOrchestrator {
       ? !existingCards.some((c) => c.service_line === touchedServiceLine)
       : false;
 
-    // Если нет явного updatedCard, пробуем подтянуть следующий шаг из лучшей существующей карточки.
-    const bestFreshCard = pickBestCard(freshCards);
+    // Bulk create: несколько карточек созданы одновременно (раздел 25 ТЗ v9.1).
+    const newCardCount = validActions.filter((a) => a.type === "upsert_product_card").length;
+    const isBulkCreate = newCardCount > 1;
+
+    // Auto-transition: карточка завершена → переходим к следующей в очереди (раздел 25 ТЗ v9.1).
+    const updatedCardDone = updatedCard ? computeReadiness(updatedCard).readiness_score === 100 : false;
+    const autoTransitionTarget = (updatedCardDone && catalog && !isBulkCreate)
+      ? pickNextCardInQueue(freshCards, catalog)
+      : undefined;
+    const isAutoTransition = !!autoTransitionTarget && autoTransitionTarget.service_line !== updatedCard?.service_line;
+
+    // Если нет явного updatedCard, подтягиваем следующий шаг из первой карточки в очереди.
+    const bestFreshCard = catalog
+      ? (pickNextCardInQueue(freshCards, catalog) ?? pickBestCard(freshCards))
+      : pickBestCard(freshCards);
     const nextStep = updatedCard
       ? computeNextStep(updatedCard)
       : extraction.next_step ?? (bestFreshCard ? computeNextStep(bestFreshCard) : undefined);
@@ -174,19 +193,27 @@ export class BusinessAssistantOrchestrator {
 
     let baseResponse: string;
 
+    // Приоритет 0: bulk create — ответ из clarification_text модели (раздел 25 ТЗ v9.1).
+    if (isBulkCreate) {
+      baseResponse = extraction.clarification_text
+        ?? `Создал ${newCardCount} карточек услуг. Начнём с первой.`;
     // Приоритет 1: disambiguation — пользователь упомянул другую услугу, нужно уточнение.
-    if (disambiguationNeeded && derivedActiveServiceLine && !updatedCard) {
+    } else if (disambiguationNeeded && derivedActiveServiceLine && !updatedCard) {
       const activeCard = freshCards.find((c) => c.service_line === derivedActiveServiceLine);
       const activeName = activeCard?.name ?? derivedActiveServiceLine;
       baseResponse = extraction.clarification_text
         ?? `Уточните: это дополнение к «${sanitizeForResponse(activeName)}» или вы хотите добавить отдельную новую услугу?`;
-    // Приоритет 2: foundation только что закрылась — переходим к сбору карточки.
+    // Приоритет 2: автопереход к следующей карточке в очереди (раздел 25 ТЗ v9.1).
+    } else if (isAutoTransition && autoTransitionTarget && updatedCard) {
+      const nextFirstStep = computeNextStep(autoTransitionTarget, nichePack);
+      baseResponse = `Записал «${sanitizeForResponse(updatedCard.name)}» — карточка заполнена. Переходим к «${sanitizeForResponse(autoTransitionTarget.name)}». ${nextFirstStep?.question ?? ''}`.trimEnd();
+    // Приоритет 3: foundation только что закрылась — переходим к сбору карточки.
     } else if (foundationJustCompleted && !updatedCard && !extraction.clarification_text) {
       baseResponse = "Отлично, записал основное о бизнесе. Теперь расскажите об основной услуге — как она называется?";
-    // Приоритет 3: foundation обновлена, но ещё не закрыта — спрашиваем следующее обязательное поле.
+    // Приоритет 4: foundation обновлена, но ещё не закрыта — спрашиваем следующее обязательное поле.
     } else if (foundationApplied && !freshFoundationComplete && !updatedCard && !extraction.clarification_text) {
       baseResponse = nextFoundationQuestion(freshFoundation);
-    // Приоритет 4: стандартный рендеринг.
+    // Приоритет 5: стандартный рендеринг.
     } else {
       baseResponse = this.renderResponse(extraction.intent, updatedCard, appliedActions, nextStep, extraction.clarification_text, currentStage, wasNewCard);
     }
@@ -194,9 +221,8 @@ export class BusinessAssistantOrchestrator {
     const assistantResponse = baseResponse;
 
     // Yellow block появляется ТОЛЬКО рядом с карточкой услуги — во всех остальных случаях
-    // (clarification, foundation вопросы, no-card) вопрос уже встроен в текст ответа,
-    // и дублировать его отдельным блоком нельзя.
-    const resultNextStep = updatedCard ? nextStep : undefined;
+    // (clarification, foundation вопросы, bulk create, no-card) вопрос уже встроен в текст.
+    const resultNextStep = (!isBulkCreate && updatedCard) ? nextStep : undefined;
 
     return {
       assistantResponse,

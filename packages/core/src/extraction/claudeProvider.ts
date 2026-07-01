@@ -5,7 +5,7 @@ import 'dotenv/config';
 import Anthropic from '@anthropic-ai/sdk';
 import type { ExtractionContext, ExtractionProvider, ExtractionResult } from './types.js';
 import type { ToolAction } from '../schemas/toolAction.js';
-import { NICHE_PACKS } from '../nextStepController.js';
+import { NICHE_PACKS, NICHE_SERVICE_CATALOGS } from '../nextStepController.js';
 
 const TOOL_NAME = 'extract_business_intent';
 
@@ -316,6 +316,32 @@ function buildProfileSetupPrompt(
       'If the user mentions something that sounds like a DIFFERENT new service:',
       '  → set proposed_actions: [] and clarification_text:',
       `    "Это уточнение к текущей услуге или вы хотите добавить отдельную новую услугу?"`,
+      '',
+    );
+  }
+
+  const nicheCatalog = context.nichePack ? NICHE_SERVICE_CATALOGS[context.nichePack.id] : undefined;
+  if (nicheCatalog && context.productCatalog.length === 0) {
+    lines.push(
+      '## BULK CATALOG CREATION',
+      'If the user describes their business as covering ALL or MOST services of the niche',
+      '(e.g. "делаю все виды монолитных работ", "занимаюсь всеми видами бетонных работ"),',
+      'AND the product catalog is still EMPTY — create ALL cards below in ONE batch.',
+      '',
+      'Rules for bulk create:',
+      '  1. Output ONE upsert_product_card per catalog entry (see list below).',
+      '  2. Fill ONLY id (= service_line), name, category, service_line, pricing_model ("per_m3").',
+      '     Leave ALL other fields empty — the system fills them via follow-up questions.',
+      '  3. Set clarification_text: announce the list and ask the first setup question.',
+      '     Example: "Создал 7 карточек: Ленточный фундамент, ... Начнём с «Ленточный фундамент».',
+      '     Сколько стоит — фиксированная цена или рассчитывается по объёму?"',
+      '',
+      'DO NOT use bulk create if the user mentioned only ONE specific service — create just that one.',
+      '',
+      'Catalog (use EXACTLY these values):',
+      ...nicheCatalog.map(
+        (e) => `  • "${e.name}" → id: "${e.service_line}", service_line: "${e.service_line}", category: "${e.category}"`,
+      ),
       '',
     );
   }

@@ -302,6 +302,36 @@ export function pickBestCard(cards: ProductCard[]): ProductCard | undefined {
   );
 }
 
+/** Каталог стандартных карточек для ниш (раздел 7.1.2, 25 ТЗ v9.1). */
+export const NICHE_SERVICE_CATALOGS: Record<string, { name: string; category: string; service_line: string }[]> = {
+  monolithic_works: [
+    { name: 'Ленточный фундамент', category: 'Строительство', service_line: 'strip_foundation' },
+    { name: 'Плитный фундамент',   category: 'Строительство', service_line: 'slab_foundation' },
+    { name: 'Ростверк',            category: 'Строительство', service_line: 'rostwerk' },
+    { name: 'Дорожки',             category: 'Строительство', service_line: 'pathways' },
+    { name: 'Отмостка',            category: 'Строительство', service_line: 'otmostka' },
+    { name: 'Погреб',              category: 'Строительство', service_line: 'cellar' },
+    { name: 'Армопояс',            category: 'Строительство', service_line: 'armopoyar' },
+  ],
+};
+
+/**
+ * Очередь карточек по catalog order (раздел 7.1.2, 25 ТЗ v9.1).
+ * Возвращает первую каталожную карточку с readiness < 100%; некаталожные — через pickBestCard.
+ */
+export function pickNextCardInQueue(
+  cards: ProductCard[],
+  catalog: { service_line: string }[],
+): ProductCard | undefined {
+  for (const entry of catalog) {
+    const card = cards.find((c) => c.service_line === entry.service_line);
+    if (card && computeReadiness(card).readiness_score < 100) return card;
+  }
+  const catalogLines = new Set(catalog.map((e) => e.service_line));
+  const nonCatalog = cards.filter((c) => !catalogLines.has(c.service_line));
+  return pickBestCard(nonCatalog);
+}
+
 /**
  * Проверяет, готов ли профиль к переходу A→B (раздел 7.1.2 ТЗ v9.1):
  *   • хотя бы одна ProductCard с readiness_score >= 80 (вычисляется через computeReadiness)
