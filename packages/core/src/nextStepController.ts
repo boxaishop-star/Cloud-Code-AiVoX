@@ -1,6 +1,7 @@
 import type { ProductCard } from "./schemas/productCard.js";
 import type { BusinessFoundation } from "./schemas/businessFoundation.js";
 import { isRealValue, hasRealValue } from "./utils/placeholders.js";
+import { isVagueOnly } from "./utils/vaguePhrases.js";
 
 // Раздел 18, ТЗ v3.0 — таблица приоритетов без изменений по сути.
 export interface NextStep {
@@ -11,19 +12,22 @@ export interface NextStep {
 // Раздел 7.1.2 ТЗ v9.1: явный порядок вопросов Profile Setup.
 // scout_signals стоит ПОСЛЕ estimate_inputs и ДО customer_segments — это минимум для запуска Scout.
 // Без scout_search_signals Scout не может искать клиентов вообще, поэтому поле приоритетно.
+//
+// isVagueOnly: расплывчатый-only ответ (["всё включено"]) не считается заполненным полем —
+// модель должна дожать конкретику (раздел 7.1.2 ТЗ v9.1, Фаза 2).
 const PRIORITY_CHECKS: Array<{ id: string; check: (c: ProductCard) => boolean; question: string }> = [
   { id: "service", check: (c) => !c.name, question: "Какую услугу или продукт настроим?" },
   // При custom pricing цену не спрашиваем — нужны estimate_inputs (параметры расчёта).
   { id: "price", check: (c) => c.price === undefined && c.pricing_model !== "custom", question: "Как считается цена?" },
-  { id: "includes", check: (c) => c.includes.length === 0, question: "Что входит в услугу?" },
-  { id: "excludes", check: (c) => c.excludes.length === 0, question: "Что оплачивается отдельно?" },
+  { id: "includes", check: (c) => c.includes.length === 0 || isVagueOnly(c.includes), question: "Что входит в услугу?" },
+  { id: "excludes", check: (c) => c.excludes.length === 0 || isVagueOnly(c.excludes), question: "Что оплачивается отдельно?" },
   { id: "estimate_inputs", check: (c) => c.estimate_inputs.length === 0, question: "Какие данные нужны от клиента для расчёта?" },
   // КРИТИЧНОЕ ПОЛЕ для Scout — без него поиск невозможен (раздел 7.1.2 ТЗ v9.1).
-  { id: "scout_signals", check: (c) => c.scout_search_signals.length === 0, question: "По каким словам вас обычно ищут клиенты?" },
+  { id: "scout_signals", check: (c) => c.scout_search_signals.length === 0 || isVagueOnly(c.scout_search_signals), question: "По каким словам вас обычно ищут клиенты?" },
   { id: "customer_segments", check: (c) => c.customer_segments.length === 0, question: "Кто основной клиент?" },
   { id: "geography", check: (c) => c.geography.length === 0, question: "В каком городе/регионе искать клиентов?" },
   { id: "scout_sources", check: (c) => c.scout_sources.length === 0, question: "В каких источниках искать?" },
-  { id: "avi_questions", check: (c) => c.avi_qualification_questions.length === 0, question: "Что Avi должен уточнять у клиента?" },
+  { id: "avi_questions", check: (c) => c.avi_qualification_questions.length === 0 || isVagueOnly(c.avi_qualification_questions), question: "Что Avi должен уточнять у клиента?" },
   { id: "handoff_rules", check: (c) => c.handoff_to_human_rules.length === 0, question: "Когда передавать человеку?" },
 ];
 

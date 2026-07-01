@@ -571,3 +571,110 @@ describe("Фаза 1: сценарий ответ-на-вопрос → корр
     expect(result.rejectedActions.some(e => e.includes("существенно отличается"))).toBe(true);
   });
 });
+
+// ── Фаза 2: расплывчатые ответы не считаются заполненными (раздел 7.1.2 ТЗ v9.1) ──
+
+import { computeNextStep, computeReadiness } from "../src/nextStepController.js";
+import { isVagueOnly } from "../src/utils/vaguePhrases.js";
+
+const NAIL_BASE: ProductCard = {
+  id: "nail_ext",
+  tenant_id: "t",
+  name: "Наращивание ногтей",
+  category: "Красота и уход",
+  service_line: "nail_ext",
+  pricing_model: "fixed",
+  price: 2500,
+  currency: "RUB",
+  includes: [],
+  excludes: [],
+  estimate_inputs: [],
+  customer_segments: [],
+  geography: [],
+  scout_search_signals: [],
+  scout_sources: [],
+  avi_qualification_questions: [],
+  handoff_to_human_rules: [],
+  price_rules: [],
+  variants: [],
+  readiness_score: 0,
+  missing_fields: [],
+  evidence: [],
+  source: "business_assistant",
+  created_from_conversation: true,
+};
+
+describe("isVagueOnly", () => {
+  it("расплывчатая-only фраза → true", () => {
+    expect(isVagueOnly(["всё включено"])).toBe(true);
+    expect(isVagueOnly(["по договоренности"])).toBe(true);
+    expect(isVagueOnly(["стандартно", "как обычно"])).toBe(true);
+  });
+
+  it("конкретный ответ → false", () => {
+    expect(isVagueOnly(["снятие покрытия", "опил формы"])).toBe(false);
+  });
+
+  it("смешанный (конкретное + расплывчатое) → false (есть конкретика)", () => {
+    expect(isVagueOnly(["снятие покрытия", "всё включено"])).toBe(false);
+  });
+
+  it("пустой массив → false", () => {
+    expect(isVagueOnly([])).toBe(false);
+    expect(isVagueOnly(undefined)).toBe(false);
+  });
+});
+
+describe("computeReadiness: расплывчатые ответы не засчитываются", () => {
+  it("includes: ['всё включено'] → поле считается незаполненным", () => {
+    const card = { ...NAIL_BASE, includes: ["всё включено"], price: 2500 };
+    const { missing_fields } = computeReadiness(card);
+    expect(missing_fields).toContain("includes");
+  });
+
+  it("scout_search_signals: ['по договоренности'] → поле незаполнено", () => {
+    const card = { ...NAIL_BASE, scout_search_signals: ["по договоренности"] };
+    const { missing_fields } = computeReadiness(card);
+    expect(missing_fields).toContain("scout_signals");
+  });
+
+  it("avi_qualification_questions: ['разное'] → поле незаполнено", () => {
+    const card = { ...NAIL_BASE, avi_qualification_questions: ["разное"] };
+    const { missing_fields } = computeReadiness(card);
+    expect(missing_fields).toContain("avi_questions");
+  });
+
+  it("конкретный includes → поле засчитывается", () => {
+    const card = { ...NAIL_BASE, includes: ["снятие покрытия", "опил формы"], price: 2500 };
+    const { missing_fields } = computeReadiness(card);
+    expect(missing_fields).not.toContain("includes");
+  });
+
+  it("расплывчатый excludes не блокирует карточку → readiness_score ниже без него", () => {
+    const vagueCard = { ...NAIL_BASE, includes: ["снятие покрытия"], excludes: ["обсуждается"], price: 2500 };
+    const concreteCard = { ...NAIL_BASE, includes: ["снятие покрытия"], excludes: ["дизайн со стразами"], price: 2500 };
+    expect(computeReadiness(vagueCard).missing_fields).toContain("excludes");
+    expect(computeReadiness(concreteCard).missing_fields).not.toContain("excludes");
+  });
+});
+
+describe("computeNextStep: расплывчатый ответ → тот же вопрос снова", () => {
+  it("includes = ['всё включено'] → nextStep.id = includes", () => {
+    const card = { ...NAIL_BASE, price: 2500, includes: ["всё включено"] };
+    const step = computeNextStep(card);
+    expect(step?.id).toBe("includes");
+  });
+
+  it("scout_signals = ['стандартно'] → nextStep.id = scout_signals", () => {
+    const card = {
+      ...NAIL_BASE,
+      price: 2500,
+      includes: ["снятие покрытия"],
+      excludes: ["дизайн"],
+      estimate_inputs: ["длина"],
+      scout_search_signals: ["стандартно"],
+    };
+    const step = computeNextStep(card);
+    expect(step?.id).toBe("scout_signals");
+  });
+});
