@@ -27,8 +27,6 @@ export const ProductCardSchema = z.object({
   scout_sources: z.array(z.string()).default([]),
   avi_qualification_questions: z.array(z.string()).default([]),
   handoff_to_human_rules: z.array(z.string()).default([]),
-  readiness_score: z.number().min(0).max(100).default(0),
-  missing_fields: z.array(z.string()).default([]),
   evidence: z.array(z.record(z.string(), z.unknown())).default([]),
   source: z.string().default("business_assistant"),
   created_from_conversation: z.boolean().default(true),

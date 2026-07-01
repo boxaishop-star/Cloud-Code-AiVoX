@@ -1,6 +1,6 @@
 import { classifyIntentLocally } from "./intentEngine.js";
 import { validateProposedActions, sanitizeForResponse } from "./validation.js";
-import { computeNextStep, computeReadiness, checkProfileReadyForDailyAssistant } from "./nextStepController.js";
+import { computeNextStep, computeReadiness, checkProfileReadyForDailyAssistant, pickBestCard } from "./nextStepController.js";
 import { isRealValue, hasRealValue } from "./utils/placeholders.js";
 import type { DataStore } from "./store.js";
 import type { ExtractionProvider } from "./extraction/types.js";
@@ -91,15 +91,13 @@ export class BusinessAssistantOrchestrator {
 
     // Активная услуга: либо передана UI явно, либо вычисляется как лучшая карточка в profile_setup.
     const derivedActiveServiceLine = input.activeServiceLine
-      ?? (currentStage === "profile_setup" && existingCards.length > 0
-        ? existingCards.reduce((b, c) => c.readiness_score > b.readiness_score ? c : b).service_line
+      ?? (currentStage === "profile_setup"
+        ? pickBestCard(existingCards)?.service_line
         : undefined);
 
     // Передаём missing_fields лучшей карточки в контекст провайдера —
     // модель точно знает, каких данных не хватает, и не повторяет одни вопросы.
-    const bestExisting = existingCards.length > 0
-      ? existingCards.reduce((b, c) => c.readiness_score > b.readiness_score ? c : b)
-      : undefined;
+    const bestExisting = pickBestCard(existingCards);
     const { missing_fields: contextMissingFields } = bestExisting
       ? computeReadiness(bestExisting)
       : { missing_fields: [] };
@@ -148,10 +146,6 @@ export class BusinessAssistantOrchestrator {
     const updatedCard = touchedServiceLine
       ? freshCards.find((c) => c.service_line === touchedServiceLine)
       : undefined;
-    if (updatedCard) {
-      const readiness = computeReadiness(updatedCard);
-      Object.assign(updatedCard, readiness);
-    }
 
     // Определяем создание vs обновление — влияет на формулировку ответа.
     const wasNewCard = touchedServiceLine
@@ -159,9 +153,7 @@ export class BusinessAssistantOrchestrator {
       : false;
 
     // Если нет явного updatedCard, пробуем подтянуть следующий шаг из лучшей существующей карточки.
-    const bestFreshCard = freshCards.length > 0
-      ? freshCards.reduce((b, c) => c.readiness_score > b.readiness_score ? c : b)
-      : undefined;
+    const bestFreshCard = pickBestCard(freshCards);
     const nextStep = updatedCard
       ? computeNextStep(updatedCard)
       : extraction.next_step ?? (bestFreshCard ? computeNextStep(bestFreshCard) : undefined);
@@ -173,11 +165,7 @@ export class BusinessAssistantOrchestrator {
     const freshFoundation = await this.store.getFoundation(input.tenant_id);
 
     if (currentStage === "profile_setup") {
-      const freshCardsWithReadiness = freshCards.map((c) => {
-        const r = computeReadiness(c);
-        return { ...c, ...r };
-      });
-      if (checkProfileReadyForDailyAssistant(freshCardsWithReadiness, freshFoundation)) {
+      if (checkProfileReadyForDailyAssistant(freshCards, freshFoundation)) {
         await this.store.applyAction({
           type: "upsert_business_foundation",
           payload: { tenant_id: input.tenant_id, assistant_stage: "daily_assistant" },

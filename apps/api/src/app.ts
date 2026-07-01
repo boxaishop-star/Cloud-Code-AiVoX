@@ -7,6 +7,7 @@ import {
   getPrismaClient,
   getRoleFromClerkUser,
   computeReadiness,
+  pickBestCard,
   type AdminDataStore,
 } from '@aivox/core';
 
@@ -137,7 +138,7 @@ app.get('/api/setup-plan', async (req, res) => {
       res.json({ plan: [], bestCard: null });
       return;
     }
-    const bestCard = cards.reduce((b, c) => c.readiness_score > b.readiness_score ? c : b);
+    const bestCard = pickBestCard(cards)!;
     const { readiness_score, missing_fields, plan } = computeReadiness(bestCard);
     res.json({ plan, readiness_score, missing_fields, bestCard: { id: bestCard.id, name: bestCard.name, service_line: bestCard.service_line } });
   } catch (err) {

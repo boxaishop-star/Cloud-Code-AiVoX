@@ -2,12 +2,12 @@ import { describe, it, expect } from "vitest";
 import { BusinessAssistantOrchestrator } from "../src/orchestrator.js";
 import { InMemoryStore } from "../src/toolLayer.js";
 import { MockExtractionProvider } from "../src/extraction/mockProvider.js";
-import { checkProfileReadyForDailyAssistant } from "../src/nextStepController.js";
+import { checkProfileReadyForDailyAssistant, pickBestCard } from "../src/nextStepController.js";
 import { validateProposedActions } from "../src/validation.js";
 import type { ProductCard } from "../src/schemas/productCard.js";
 import type { BusinessFoundation } from "../src/schemas/businessFoundation.js";
 
-// Карточка с readiness_score >= 80 (заполнены первые 9 из 11 полей).
+// Карточка с реальным readiness >= 80 (computeReadiness даёт 90%: 9/10 done, estimate_inputs skipped).
 const READY_CARD: ProductCard = {
   id: "manicure",
   tenant_id: "t1",
@@ -28,8 +28,6 @@ const READY_CARD: ProductCard = {
   handoff_to_human_rules: [],
   price_rules: [],
   variants: [],
-  readiness_score: 82,
-  missing_fields: ["estimate_inputs", "handoff_rules"],
   evidence: [],
   source: "business_assistant",
   created_from_conversation: true,
@@ -55,7 +53,8 @@ describe("checkProfileReadyForDailyAssistant", () => {
   });
 
   it("возвращает false если лучшая карточка readiness < 80", () => {
-    const weakCard = { ...READY_CARD, readiness_score: 70 };
+    // service+price+scout_signals+geography = 4/10 = 40% < 80
+    const weakCard = { ...READY_CARD, includes: [], excludes: [], customer_segments: [], scout_sources: [], avi_qualification_questions: [] };
     expect(checkProfileReadyForDailyAssistant([weakCard], FULL_FOUNDATION)).toBe(false);
   });
 
@@ -85,11 +84,13 @@ describe("checkProfileReadyForDailyAssistant", () => {
   });
 
   it("выбирает лучшую из нескольких карточек", () => {
-    const weakCard = { ...READY_CARD, service_line: "pedicure", readiness_score: 30 };
+    // service+price+scout_signals+geography = 4/10 = 40%
+    const weakCard = { ...READY_CARD, service_line: "pedicure", includes: [], excludes: [], customer_segments: [], scout_sources: [], avi_qualification_questions: [] };
     // Одна слабая + одна сильная (с scout_search_signals) → true
     expect(checkProfileReadyForDailyAssistant([weakCard, READY_CARD], FULL_FOUNDATION)).toBe(true);
-    // Обе слабые → false
-    expect(checkProfileReadyForDailyAssistant([weakCard, { ...READY_CARD, readiness_score: 79 }], FULL_FOUNDATION)).toBe(false);
+    // Обе слабые → false: service+price+scout_signals+geography+includes = 5/10 = 50%
+    const anotherWeak = { ...READY_CARD, excludes: [], customer_segments: [], scout_sources: [], avi_qualification_questions: [] };
+    expect(checkProfileReadyForDailyAssistant([weakCard, anotherWeak], FULL_FOUNDATION)).toBe(false);
   });
 
   // Placeholder-защита gate A→B (раздел 7.1.2 ТЗ v9.1).
@@ -125,6 +126,32 @@ describe("checkProfileReadyForDailyAssistant", () => {
   });
 });
 
+// ── pickBestCard: регрессия выбора по реальному readiness ────────────────────
+
+describe("pickBestCard: выбирает по computeReadiness, не по хранимому полю (раздел 7.1.2 ТЗ v9.1)", () => {
+  it("возвращает undefined для пустого массива", () => {
+    expect(pickBestCard([])).toBeUndefined();
+  });
+
+  it("единственная карточка → она и возвращается", () => {
+    expect(pickBestCard([READY_CARD])).toBe(READY_CARD);
+  });
+
+  it("тенант с 2 карточками: выбирает ту, что реально заполнена лучше, независимо от порядка", () => {
+    // READY_CARD: 9/10 = 90%, service_line="manicure"
+    // lowCard: service+price+scout_signals+geography = 4/10 = 40%, service_line="pedicure"
+    const lowCard = {
+      ...READY_CARD,
+      service_line: "pedicure",
+      name: "Педикюр",
+      includes: [], excludes: [], customer_segments: [], scout_sources: [], avi_qualification_questions: [],
+    };
+    // Педикюр стоит первым в массиве (симулируем «первую созданную карточку») — должен выиграть Маникюр
+    expect(pickBestCard([lowCard, READY_CARD])?.service_line).toBe("manicure");
+    expect(pickBestCard([READY_CARD, lowCard])?.service_line).toBe("manicure");
+  });
+});
+
 // ── Orchestrator stage transition ─────────────────────────────────────────────
 
 describe("Orchestrator: переход profile_setup → daily_assistant", () => {
@@ -153,10 +180,10 @@ describe("Orchestrator: переход profile_setup → daily_assistant", () =>
   it("переходит в daily_assistant когда readiness >= 80 и foundation заполнен", async () => {
     const store = new InMemoryStore();
 
-    // Предзагружаем карточку с readiness >= 80 напрямую в store.
+    // Предзагружаем карточку с реальными полями readiness >= 80 напрямую в store.
     await store.applyAction({
       type: "upsert_product_card",
-      payload: { ...READY_CARD, readiness_score: 82 },
+      payload: { ...READY_CARD },
     });
     // Предзагружаем foundation (без assistant_stage — он будет дефолтным "profile_setup").
     await store.applyAction({
@@ -478,8 +505,6 @@ describe("Gate 2b: update_product_card с другим name/category → disambi
     handoff_to_human_rules: [],
     price_rules: [],
     variants: [],
-    readiness_score: 50,
-    missing_fields: [],
     evidence: [],
     source: "business_assistant" as const,
     created_from_conversation: true,
@@ -597,8 +622,6 @@ const NAIL_BASE: ProductCard = {
   handoff_to_human_rules: [],
   price_rules: [],
   variants: [],
-  readiness_score: 0,
-  missing_fields: [],
   evidence: [],
   source: "business_assistant",
   created_from_conversation: true,

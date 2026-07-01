@@ -173,9 +173,17 @@ export function computeReadiness(card: ProductCard): {
   return { readiness_score, missing_fields, plan };
 }
 
+/** Единственный источник истины при выборе «лучшей» карточки — не хранимое поле, а live computeReadiness(). */
+export function pickBestCard(cards: ProductCard[]): ProductCard | undefined {
+  if (cards.length === 0) return undefined;
+  return cards.reduce((best, c) =>
+    computeReadiness(c).readiness_score > computeReadiness(best).readiness_score ? c : best
+  );
+}
+
 /**
  * Проверяет, готов ли профиль к переходу A→B (раздел 7.1.2 ТЗ v9.1):
- *   • хотя бы одна ProductCard с readiness_score >= 80
+ *   • хотя бы одна ProductCard с readiness_score >= 80 (вычисляется через computeReadiness, не хранимое поле)
  *   • лучшая карточка содержит scout_search_signals (Scout без них не работает)
  *   • BusinessFoundation содержит company_description, market_type и geography
  *   Placeholder-значения не засчитываются (utils/placeholders.ts).
@@ -185,8 +193,9 @@ export function checkProfileReadyForDailyAssistant(
   foundation: BusinessFoundation | undefined,
 ): boolean {
   if (cards.length === 0) return false;
-  const bestCard = cards.reduce((best, c) => c.readiness_score > best.readiness_score ? c : best);
-  if (bestCard.readiness_score < 80) return false;
+  const bestCard = pickBestCard(cards)!;
+  const { readiness_score } = computeReadiness(bestCard);
+  if (readiness_score < 80) return false;
   // Scout не может работать без ключевых слов поиска — жёсткое условие перехода.
   if (bestCard.scout_search_signals.length === 0) return false;
   // Placeholder-значения не засчитываются — тот же фильтр, что в isFoundationComplete.
