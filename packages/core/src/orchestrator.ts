@@ -1,6 +1,6 @@
 import { classifyIntentLocally } from "./intentEngine.js";
 import { validateProposedActions, sanitizeForResponse } from "./validation.js";
-import { computeNextStep, computeReadiness, checkProfileReadyForDailyAssistant, pickBestCard } from "./nextStepController.js";
+import { computeNextStep, computeReadiness, checkProfileReadyForDailyAssistant, pickBestCard, resolveNichePack } from "./nextStepController.js";
 import { isRealValue, hasRealValue } from "./utils/placeholders.js";
 import type { DataStore } from "./store.js";
 import type { ExtractionProvider } from "./extraction/types.js";
@@ -102,6 +102,8 @@ export class BusinessAssistantOrchestrator {
       ? computeReadiness(bestExisting)
       : { missing_fields: [] };
 
+    const nichePack = resolveNichePack(bestExisting, foundation ?? undefined);
+
     const extraction = await this.extractor.extract(input.userMessage, {
       tenant_id: input.tenant_id,
       businessFoundation: foundation ?? {},
@@ -110,6 +112,7 @@ export class BusinessAssistantOrchestrator {
       missing_fields: contextMissingFields,
       foundationComplete,
       activeServiceLine: derivedActiveServiceLine,
+      nichePack,
     });
 
     // Projected foundation: если в этом же батче есть foundation-акция,

@@ -1,4 +1,5 @@
 import type { ToolAction } from "../schemas/toolAction.js";
+import type { NichePack } from "../nextStepController.js";
 
 // Раздел 12.2, 15, ТЗ v3.0. ЭТО КЛЮЧЕВОЙ ИНТЕРФЕЙС ДЛЯ ПЕРЕХОДА ОТ ЭТАПА 0 К ЭТАПУ 1.
 //
@@ -26,6 +27,8 @@ export interface ExtractionContext {
    * When false the model MUST collect foundation data first; upsert_product_card is blocked by the validator.
    */
   foundationComplete?: boolean;
+  /** Resolved niche pack for this tenant — used to show relevant examples in prompts (раздел 6 ТЗ v9.1). */
+  nichePack?: NichePack;
 }
 
 export interface ExtractionResult {

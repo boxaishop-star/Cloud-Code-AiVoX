@@ -599,7 +599,7 @@ describe("Фаза 1: сценарий ответ-на-вопрос → корр
 
 // ── Фаза 2: расплывчатые ответы не считаются заполненными (раздел 7.1.2 ТЗ v9.1) ──
 
-import { computeNextStep, computeReadiness, SETUP_PLAN } from "../src/nextStepController.js";
+import { computeNextStep, computeReadiness, SETUP_PLAN, resolveNichePack, NICHE_PACKS } from "../src/nextStepController.js";
 import { isVagueOnly } from "../src/utils/vaguePhrases.js";
 
 const NAIL_BASE: ProductCard = {
@@ -798,5 +798,59 @@ describe("computeReadiness: возвращает plan с NodeStatus", () => {
       expect(node.question).toBeTruthy();
       expect(node.example).toBeTruthy();
     }
+  });
+});
+
+// ── Раздел 6, 7.1.2 ТЗ v9.1: изоляция SETUP_PLAN по нишам ──────────────────
+
+describe("resolveNichePack: изоляция ниш", () => {
+  it("Красота и уход → nail_extension", () => {
+    expect(resolveNichePack({ ...NAIL_BASE, category: "Красота и уход" })).toBe(NICHE_PACKS.nail_extension);
+  });
+
+  it("монолитные работы в company_description → monolithic_works", () => {
+    const card = { ...NAIL_BASE, category: "Строительство", name: "Монолитные работы" };
+    const foundation = { tenant_id: "t", company_description: "Монолитные работы, заливка перекрытий" };
+    expect(resolveNichePack(card, foundation as any).id).toBe("monolithic_works");
+  });
+
+  it("кладка → masonry, НЕ monolithic_works, НЕ nail_extension", () => {
+    const card = { ...NAIL_BASE, category: "Строительство", name: "Кладка кирпича" };
+    const foundation = { tenant_id: "t", company_description: "Кладка кирпича и газоблока" };
+    const pack = resolveNichePack(card, foundation as any);
+    expect(pack.id).toBe("masonry");
+    expect(pack.id).not.toBe("monolithic_works");
+    expect(pack.id).not.toBe("nail_extension");
+  });
+
+  it("неизвестная ниша → default fallback, не бросает ошибку", () => {
+    const card = { ...NAIL_BASE, category: "IT-услуги", name: "IT-консультация" };
+    const pack = resolveNichePack(card);
+    expect(pack.id).toBe("default");
+  });
+
+  it("примеры кладки не содержат nail-специфичные слова и не совпадают с monolithic", () => {
+    const pack = NICHE_PACKS.masonry;
+    const allExamples = Object.values(pack.nodes).map((n) => n.example).join(" ");
+    expect(allExamples).not.toMatch(/ноготь|гель-лак|стразы|маникюр/i);
+    expect(allExamples).not.toMatch(/перекрытие|армирование|бетонасос/i);
+  });
+
+  it("примеры монолита не содержат nail-специфичные слова", () => {
+    const pack = NICHE_PACKS.monolithic_works;
+    const allExamples = Object.values(pack.nodes).map((n) => n.example).join(" ");
+    expect(allExamples).not.toMatch(/ноготь|гель-лак|стразы|маникюр/i);
+  });
+
+  it("computeReadiness для карточки «Кладка» использует masonry-примеры, не nail", () => {
+    const masonryCard = {
+      ...NAIL_BASE,
+      category: "Строительство",
+      name: "Кладка кирпича",
+    };
+    const { plan } = computeReadiness(masonryCard);
+    const includesNode = plan.find((n) => n.id === "includes")!;
+    expect(includesNode.example).not.toMatch(/ноготь|гель|покрытие лаком/i);
+    expect(includesNode.example).toMatch(/кладк|раствор|расшивк/i);
   });
 });
