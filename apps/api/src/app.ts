@@ -8,6 +8,7 @@ import {
   getRoleFromClerkUser,
   computeReadiness,
   pickBestCard,
+  resolveNichePack,
   type AdminDataStore,
 } from '@aivox/core';
 
@@ -139,7 +140,9 @@ app.get('/api/setup-plan', async (req, res) => {
       return;
     }
     const bestCard = pickBestCard(cards)!;
-    const { readiness_score, missing_fields, plan } = computeReadiness(bestCard);
+    const foundation = await store.getFoundation(tenantId);
+    const pack = resolveNichePack(bestCard, foundation ?? undefined);
+    const { readiness_score, missing_fields, plan } = computeReadiness(bestCard, pack);
     res.json({ plan, readiness_score, missing_fields, bestCard: { id: bestCard.id, name: bestCard.name, service_line: bestCard.service_line } });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
