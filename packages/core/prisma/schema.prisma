@@ -95,10 +95,43 @@ model RelationshipCard {
   owner_agent          String?
   handoff_required     Boolean @default(false)
   handoff_reason       String?
+  birthday             String?
 
   @@unique([tenant_id, id], name: "tenant_card_id")
   @@index([tenant_id])
   @@map("relationship_cards")
+}
+
+model Conversation {
+  db_id                String  @id @default(uuid())
+  id                   String
+  tenant_id            String
+  channel              String
+  external_chat_id     String
+  external_user_id     String
+  relationship_card_id String?
+  product_card_id      String?
+  status               String  @default("active")   // active|needs_human|closed
+  created_at           String
+  updated_at           String
+
+  @@unique([tenant_id, external_chat_id, channel], name: "tenant_chat_channel")
+  @@index([tenant_id])
+  @@map("conversations")
+}
+
+model Message {
+  id              String @id @default(uuid())
+  conversation_id String
+  tenant_id       String
+  role            String  // client|avi
+  text            String
+  logged_facts    Json    @default("[]")
+  created_at      String
+
+  @@index([conversation_id])
+  @@index([tenant_id])
+  @@map("messages")
 }
 
 // Раздел 7.3.8 ТЗ: задача Scout — список каналов и сигналов поиска без привязки к

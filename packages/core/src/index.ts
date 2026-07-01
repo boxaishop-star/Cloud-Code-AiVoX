@@ -18,5 +18,8 @@ export * from "./db/client.js";
 export * from "./db/postgresStore.js";
 export * from "./auth/roles.js";
 export * from "./auth/requireRole.js";
+export * from "./schemas/conversation.js";
+export * from "./schemas/message.js";
 export * from "./avi/draftProvider.js";
 export * from "./avi/conversationEngine.js";
+export * from "./avi/inboundHandler.js";

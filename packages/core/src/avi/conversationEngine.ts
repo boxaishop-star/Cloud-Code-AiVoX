@@ -11,11 +11,18 @@ export interface AviLoggedFact {
   productCardVersion: string;
 }
 
+export interface AviClientFact {
+  field: string;
+  value: string;
+}
+
 export interface AviResponse {
   message: string;
   handoffTriggered: boolean;
   handoffReason?: string;
   loggedFacts: AviLoggedFact[];
+  clientFacts: AviClientFact[];
+  funnelSignal?: 'qualified' | 'proposal_needed' | 'won' | 'lost';
 }
 
 export interface AviConversationEngine {
@@ -83,6 +90,31 @@ const AVI_TOOL: Anthropic.Tool = {
           },
         },
       },
+      client_facts: {
+        type: 'array',
+        description:
+          'Facts the CLIENT stated about THEMSELVES (not the service). ' +
+          'Capture only what they volunteered — never ask.',
+        items: {
+          type: 'object' as const,
+          required: ['field', 'value'],
+          properties: {
+            field: {
+              type: 'string',
+              enum: ['name', 'contact', 'birthday', 'detected_need'],
+            },
+            value: { type: 'string' },
+          },
+        },
+      },
+      funnel_signal: {
+        type: 'string',
+        enum: ['qualified', 'proposal_needed', 'won', 'lost'],
+        description:
+          'ONLY set when the client gives an EXPLICIT, unambiguous signal — e.g. ' +
+          '"хочу оформить заявку" → qualified/proposal_needed; "не интересно, спасибо" → lost; ' +
+          '"согласен, когда начнёте" → won. Omit entirely if ambiguous — do NOT guess or score.',
+      },
     },
   },
 };
@@ -133,6 +165,21 @@ export function buildAviSystemPrompt(card: ProductCard, foundation: BusinessFoun
     lines.push('', '#### Нишевые правила этой карточки');
     card.handoff_to_human_rules.forEach((r) => lines.push(`  • ${r}`));
   }
+
+  lines.push(
+    '',
+    '## Регистрация фактов о клиенте (client_facts)',
+    '  Если клиент называет своё имя, контакт (телефон/email), дату рождения или свою потребность —',
+    '  фиксируй в client_facts[]. НЕ спрашивай эти данные — только записывай, если клиент упомянул сам.',
+    '  Поля: name, contact, birthday, detected_need.',
+    '',
+    '## Сигнал воронки (funnel_signal) — только явные, однозначные слова клиента',
+    '  "хочу оформить заявку" / "пришлите КП" → proposal_needed.',
+    '  "согласен", "когда начнёте", "беру", "оплатил" → won.',
+    '  "не интересно", "передумал", "нашёл другого" → lost.',
+    '  ЗАПРЕЩЕНО угадывать намерение или оценивать вероятность — только прямые слова клиента.',
+    '  Если сигнал неоднозначен — НЕ ставь funnel_signal вообще (раздел 4 ТЗ v9.1).',
+  );
 
   const hasBusinessDetails = foundation.address || foundation.phone || foundation.working_hours;
   if (hasBusinessDetails) {
@@ -207,6 +254,8 @@ export class ClaudeAviConversationEngine implements AviConversationEngine {
     const input = (block as { input: Record<string, unknown> }).input;
 
     const rawFacts = (input.logged_facts as Array<{ field: string; value: string }> | undefined) ?? [];
+    const rawClientFacts = (input.client_facts as Array<{ field: string; value: string }> | undefined) ?? [];
+    const rawFunnelSignal = input.funnel_signal as string | undefined;
 
     return {
       message: String(input.message),
@@ -217,6 +266,8 @@ export class ClaudeAviConversationEngine implements AviConversationEngine {
         value: String(f.value),
         productCardVersion: cardVersion,
       })),
+      clientFacts: rawClientFacts.map((f) => ({ field: String(f.field), value: String(f.value) })),
+      funnelSignal: rawFunnelSignal as AviResponse['funnelSignal'],
     };
   }
 }
@@ -232,6 +283,8 @@ export class MockAviConversationEngine implements AviConversationEngine {
         handoffTriggered?: boolean;
         handoffReason?: string;
         loggedFacts?: Array<{ field: string; value: string }>;
+        clientFacts?: Array<{ field: string; value: string }>;
+        funnelSignal?: AviResponse['funnelSignal'];
       }
     >,
   ) {}
@@ -245,7 +298,7 @@ export class MockAviConversationEngine implements AviConversationEngine {
     const cardVersion = productCard.updated_at ?? productCard.id;
     const key = Object.keys(this.fixtures).find((k) => incomingMessage.includes(k));
     if (!key) {
-      return { message: 'Уточню этот вопрос у специалиста.', handoffTriggered: false, loggedFacts: [] };
+      return { message: 'Уточню этот вопрос у специалиста.', handoffTriggered: false, loggedFacts: [], clientFacts: [] };
     }
     const fix = this.fixtures[key];
     return {
@@ -253,6 +306,8 @@ export class MockAviConversationEngine implements AviConversationEngine {
       handoffTriggered: fix.handoffTriggered ?? false,
       handoffReason: fix.handoffReason,
       loggedFacts: (fix.loggedFacts ?? []).map((f) => ({ ...f, productCardVersion: cardVersion })),
+      clientFacts: fix.clientFacts ?? [],
+      funnelSignal: fix.funnelSignal,
     };
   }
 }

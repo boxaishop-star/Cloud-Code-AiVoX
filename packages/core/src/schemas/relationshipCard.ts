@@ -33,6 +33,7 @@ export const RelationshipCardSchema = z.object({
   owner_agent: z.enum(["scout", "avi", "human"]).optional(),
   handoff_required: z.boolean().default(false),
   handoff_reason: z.string().optional(),
+  birthday: z.string().optional(),
 }).refine(
   (card) => !(card.source_tier === "tier2" && card.status === "new"),
   { message: "Tier 2 источник не может иметь статус 'new' — обязателен 'pending_review' до подтверждения человеком (раздел 7.3.1 ТЗ)" }

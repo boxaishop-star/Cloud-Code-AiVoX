@@ -5,6 +5,8 @@ import { ProductCardSchema } from "./schemas/productCard.js";
 import type { BusinessFoundation } from "./schemas/businessFoundation.js";
 import type { ScoutJob } from "./schemas/scoutJob.js";
 import { ScoutJobSchema, ScoutChannelSchema } from "./schemas/scoutJob.js";
+import type { Conversation } from "./schemas/conversation.js";
+import type { Message } from "./schemas/message.js";
 import type { DataStore, AdminDataStore } from "./store.js";
 
 // Список array-полей ProductCard, защищённых от тихой перезаписи пустым массивом при update.
@@ -24,6 +26,8 @@ export class InMemoryStore implements AdminDataStore {
   private productCards = new Map<string, ProductCard[]>(); // key: tenant_id
   private relationshipCards = new Map<string, Record<string, unknown>[]>();
   private scoutJobs = new Map<string, ScoutJob>();          // key: job id
+  private conversations = new Map<string, Conversation>();  // key: `${tenantId}:${channel}:${externalChatId}`
+  private messages = new Map<string, Message[]>();          // key: conversation_id
 
   getFoundation(tenantId: string): Promise<BusinessFoundation | undefined> {
     return Promise.resolve(this.foundations.get(tenantId));
@@ -41,6 +45,44 @@ export class InMemoryStore implements AdminDataStore {
   // AdminDataStore — раздел 9.1 ТЗ. Источник: уникальные tenant_id из foundations.
   getAllTenants(): Promise<string[]> {
     return Promise.resolve([...this.foundations.keys()]);
+  }
+
+  // ── Conversation ──────────────────────────────────────────────────────────────
+
+  findConversation(tenantId: string, channel: string, externalChatId: string): Promise<Conversation | undefined> {
+    return Promise.resolve(this.conversations.get(`${tenantId}:${channel}:${externalChatId}`));
+  }
+  saveConversation(conversation: Conversation): Promise<void> {
+    this.conversations.set(`${conversation.tenant_id}:${conversation.channel}:${conversation.external_chat_id}`, conversation);
+    return Promise.resolve();
+  }
+
+  // ── Message ───────────────────────────────────────────────────────────────────
+
+  getMessages(conversationId: string): Promise<Message[]> {
+    return Promise.resolve(this.messages.get(conversationId) ?? []);
+  }
+  saveMessage(message: Message): Promise<void> {
+    const list = this.messages.get(message.conversation_id) ?? [];
+    list.push(message);
+    this.messages.set(message.conversation_id, list);
+    return Promise.resolve();
+  }
+
+  // ── RelationshipCard targeted ops ─────────────────────────────────────────────
+
+  getRelationshipCardById(tenantId: string, id: string): Promise<Record<string, unknown> | undefined> {
+    const list = this.relationshipCards.get(tenantId) ?? [];
+    return Promise.resolve(list.find((c) => c.id === id));
+  }
+  updateRelationshipCard(tenantId: string, id: string, patch: Record<string, unknown>): Promise<void> {
+    const list = this.relationshipCards.get(tenantId) ?? [];
+    const idx = list.findIndex((c) => c.id === id);
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...patch };
+      this.relationshipCards.set(tenantId, list);
+    }
+    return Promise.resolve();
   }
 
   applyAction(action: ToolAction): Promise<ToolActionResult> {
@@ -101,6 +143,19 @@ export class InMemoryStore implements AdminDataStore {
           const list = this.relationshipCards.get(tenantId) ?? [];
           list.push(action.payload as Record<string, unknown>);
           this.relationshipCards.set(tenantId, list);
+          return Promise.resolve({ action, applied: true });
+        }
+        case "update_relationship_card": {
+          const p = action.payload as Record<string, unknown>;
+          const tenantId = p.tenant_id as string;
+          const id = p.id as string;
+          const { tenant_id: _t, id: _i, ...patch } = p;
+          const list = this.relationshipCards.get(tenantId) ?? [];
+          const idx = list.findIndex((c) => c.id === id);
+          if (idx >= 0) {
+            list[idx] = { ...list[idx], ...patch };
+            this.relationshipCards.set(tenantId, list);
+          }
           return Promise.resolve({ action, applied: true });
         }
         case "create_scout_job": {

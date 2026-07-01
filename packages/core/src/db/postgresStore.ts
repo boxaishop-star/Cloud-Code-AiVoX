@@ -3,9 +3,13 @@ import { randomUUID } from 'crypto';
 import { ProductCardSchema } from '../schemas/productCard.js';
 import { BusinessFoundationSchema } from '../schemas/businessFoundation.js';
 import { ScoutJobSchema, ScoutChannelSchema } from '../schemas/scoutJob.js';
+import { ConversationSchema } from '../schemas/conversation.js';
+import { MessageSchema } from '../schemas/message.js';
 import type { ProductCard } from '../schemas/productCard.js';
 import type { BusinessFoundation } from '../schemas/businessFoundation.js';
 import type { ScoutJob } from '../schemas/scoutJob.js';
+import type { Conversation } from '../schemas/conversation.js';
+import type { Message } from '../schemas/message.js';
 import type { ToolAction, ToolActionResult } from '../schemas/toolAction.js';
 import type { DataStore, AdminDataStore } from '../store.js';
 
@@ -78,6 +82,57 @@ export class PostgresStore implements AdminDataStore {
     return rows.map((row) => ScoutJobSchema.parse(fromPrismaJob(row)));
   }
 
+  // ──────────────── Conversation ────────────────
+
+  async findConversation(tenantId: string, channel: string, externalChatId: string): Promise<Conversation | undefined> {
+    const row: Record<string, unknown> | null = await this.client.conversation.findFirst({
+      where: { tenant_id: tenantId, channel, external_chat_id: externalChatId },
+    });
+    if (!row) return undefined;
+    const { db_id: _, ...rest } = row;
+    return ConversationSchema.parse(stripNulls(rest));
+  }
+
+  async saveConversation(conversation: Conversation): Promise<void> {
+    await this.client.conversation.upsert({
+      where: { tenant_chat_channel: { tenant_id: conversation.tenant_id, external_chat_id: conversation.external_chat_id, channel: conversation.channel } },
+      create: conversation,
+      update: { status: conversation.status, updated_at: conversation.updated_at, relationship_card_id: conversation.relationship_card_id, product_card_id: conversation.product_card_id },
+    });
+  }
+
+  // ──────────────── Message ────────────────
+
+  async getMessages(conversationId: string): Promise<Message[]> {
+    const rows: Record<string, unknown>[] = await this.client.message.findMany({
+      where: { conversation_id: conversationId },
+      orderBy: { created_at: 'asc' },
+    });
+    return rows.map((row) => MessageSchema.parse({
+      ...stripNulls(row),
+      logged_facts: (row.logged_facts as unknown[]) ?? [],
+    }));
+  }
+
+  async saveMessage(message: Message): Promise<void> {
+    await this.client.message.create({ data: message });
+  }
+
+  // ──────────────── RelationshipCard targeted ops ────────────────
+
+  async getRelationshipCardById(tenantId: string, id: string): Promise<Record<string, unknown> | undefined> {
+    const row: Record<string, unknown> | null = await this.client.relationshipCard.findFirst({
+      where: { tenant_id: tenantId, id },
+    });
+    if (!row) return undefined;
+    const { db_id: _, ...rest } = row;
+    return stripNulls(rest);
+  }
+
+  async updateRelationshipCard(tenantId: string, id: string, patch: Record<string, unknown>): Promise<void> {
+    await this.client.relationshipCard.updateMany({ where: { tenant_id: tenantId, id }, data: patch });
+  }
+
   // ──────────────── Write (applyAction) ────────────────
 
   async applyAction(action: ToolAction): Promise<ToolActionResult> {
@@ -138,6 +193,15 @@ export class PostgresStore implements AdminDataStore {
         case 'create_relationship_card': {
           const p = action.payload as Record<string, unknown>;
           await this.client.relationshipCard.create({ data: p });
+          return { action, applied: true };
+        }
+
+        case 'update_relationship_card': {
+          const p = action.payload as Record<string, unknown>;
+          const tenantId = p.tenant_id as string;
+          const id = p.id as string;
+          const { tenant_id: _t, id: _i, ...patch } = p;
+          await this.client.relationshipCard.updateMany({ where: { tenant_id: tenantId, id }, data: patch });
           return { action, applied: true };
         }
 
