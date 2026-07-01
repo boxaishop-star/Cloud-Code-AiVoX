@@ -189,7 +189,7 @@ export class ClaudeExtractionProvider implements ExtractionProvider {
   }
 }
 
-function buildSystemPrompt(context: ExtractionContext): string {
+export function buildSystemPrompt(context: ExtractionContext): string {
   const stage = context.assistant_stage ?? 'profile_setup';
   const foundation =
     Object.keys(context.businessFoundation).length > 0
@@ -385,8 +385,7 @@ function buildProfileSetupPrompt(
     '  3. Re-asks the same question.',
     'BAD:  User: "всё включено" → proposed_actions: [{...includes: ["всё включено"]}]',
     'GOOD: User: "всё включено" → proposed_actions: [] + clarification_text:',
-    '  "Понял, что много включено. Перечислите конкретно — например: снятие старого покрытия,',
-    '   опил формы, стерилизация инструментов. Что именно входит в стоимость?"',
+    `  "Понял, что много включено. Перечислите конкретно — например: ${pack.nodes[missing[0] ?? 'includes']?.example ?? pack.nodes.includes.example}. Что именно входит?"`,
     '',
     '## Rules for clarification_text (reminder: plain text only, see CRITICAL RULE above)',
     '  2-3 sentences MAX. Conversational Russian. No markdown (already forbidden above).',
