@@ -9,48 +9,176 @@ export interface NextStep {
   question: string;
 }
 
-// Раздел 7.1.2 ТЗ v9.1: явный порядок вопросов Profile Setup.
-// scout_signals стоит ПОСЛЕ estimate_inputs и ДО customer_segments — это минимум для запуска Scout.
-// Без scout_search_signals Scout не может искать клиентов вообще, поэтому поле приоритетно.
-//
-// isVagueOnly: расплывчатый-only ответ (["всё включено"]) не считается заполненным полем —
-// модель должна дожать конкретику (раздел 7.1.2 ТЗ v9.1, Фаза 2).
-const PRIORITY_CHECKS: Array<{ id: string; check: (c: ProductCard) => boolean; question: string }> = [
-  { id: "service", check: (c) => !c.name, question: "Какую услугу или продукт настроим?" },
-  // При custom pricing цену не спрашиваем — нужны estimate_inputs (параметры расчёта).
-  { id: "price", check: (c) => c.price === undefined && c.pricing_model !== "custom", question: "Как считается цена?" },
-  { id: "includes", check: (c) => c.includes.length === 0 || isVagueOnly(c.includes), question: "Что входит в услугу?" },
-  { id: "excludes", check: (c) => c.excludes.length === 0 || isVagueOnly(c.excludes), question: "Что оплачивается отдельно?" },
-  { id: "estimate_inputs", check: (c) => c.estimate_inputs.length === 0, question: "Какие данные нужны от клиента для расчёта?" },
-  // КРИТИЧНОЕ ПОЛЕ для Scout — без него поиск невозможен (раздел 7.1.2 ТЗ v9.1).
-  { id: "scout_signals", check: (c) => c.scout_search_signals.length === 0 || isVagueOnly(c.scout_search_signals), question: "По каким словам вас обычно ищут клиенты?" },
-  { id: "customer_segments", check: (c) => c.customer_segments.length === 0, question: "Кто основной клиент?" },
-  { id: "geography", check: (c) => c.geography.length === 0, question: "В каком городе/регионе искать клиентов?" },
-  { id: "scout_sources", check: (c) => c.scout_sources.length === 0, question: "В каких источниках искать?" },
-  { id: "avi_questions", check: (c) => c.avi_qualification_questions.length === 0 || isVagueOnly(c.avi_qualification_questions), question: "Что Avi должен уточнять у клиента?" },
-  { id: "handoff_rules", check: (c) => c.handoff_to_human_rules.length === 0, question: "Когда передавать человеку?" },
-];
-
-export function computeNextStep(card: ProductCard | undefined): NextStep | undefined {
-  if (!card) return { id: "service", question: PRIORITY_CHECKS[0].question };
-  for (const { id, check, question } of PRIORITY_CHECKS) {
-    if (check(card)) return { id, question };
-  }
-  return undefined; // раздел 18, приоритет 12: "Ничего" — карточка готова
+// Раздел 7.1.2 ТЗ v9.1 — узел плана настройки карточки.
+export interface SetupPlanNode {
+  id: string;
+  question: string;
+  /** Конкретный пример заполнения поля (ниша Красота / Наращивание ногтей). */
+  example: string;
+  /** Показывать этот узел только когда применимо (e.g. estimate_inputs — только при custom pricing). */
+  isApplicable: (c: ProductCard) => boolean;
+  /** Поле заполнено (непустое значение). */
+  isFilled: (c: ProductCard) => boolean;
+  /** Заполненное значение — не расплывчатая фраза ("всё включено" и т.п.). */
+  isSpecificEnough: (c: ProductCard) => boolean;
 }
 
-export function computeReadiness(card: ProductCard): { readiness_score: number; missing_fields: string[] } {
-  const missing = PRIORITY_CHECKS.filter((c) => c.check(card)).map((c) => c.id);
-  // Раздел 22.4 ТЗ: readiness_score=100 тогда и только тогда, когда missing_fields пуст.
-  const readiness_score = missing.length === 0 ? 100 : Math.max(0, 100 - missing.length * (100 / PRIORITY_CHECKS.length));
-  return { readiness_score: Math.round(readiness_score), missing_fields: missing };
+export type NodeStatus = "done" | "current" | "upcoming" | "skipped";
+
+export interface SetupPlanItem {
+  id: string;
+  question: string;
+  example: string;
+  status: NodeStatus;
+}
+
+// Раздел 7.1.2 ТЗ v9.1: явный порядок вопросов Profile Setup.
+// Ниша-эталон: Красота / «Наращивание ногтей» (зафиксировано в ТЗ, не выдумывать заново).
+// scout_signals стоит после estimate_inputs и до customer_segments — минимум для Scout.
+export const SETUP_PLAN: SetupPlanNode[] = [
+  {
+    id: "service",
+    question: "Как называется ваша услуга?",
+    example: "«Наращивание ногтей гелем»",
+    isApplicable: () => true,
+    isFilled: (c) => !!c.name,
+    isSpecificEnough: (c) => !!c.name,
+  },
+  {
+    id: "price",
+    // При custom pricing цену не спрашиваем — нужны estimate_inputs.
+    question: "Сколько стоит — фиксированная цена или зависит от формы/длины?",
+    example: "база 2500 ₽",
+    isApplicable: (c) => c.pricing_model !== "custom",
+    isFilled: (c) => c.price !== undefined && c.price > 0,
+    isSpecificEnough: (c) => c.price !== undefined && c.price > 0,
+  },
+  {
+    id: "includes",
+    question: "Что входит в базовую услугу?",
+    example: "снятие старого покрытия, опил формы, стерилизация инструментов, однотонное покрытие гель-лаком",
+    isApplicable: () => true,
+    isFilled: (c) => c.includes.length > 0,
+    isSpecificEnough: (c) => c.includes.length > 0 && !isVagueOnly(c.includes),
+  },
+  {
+    id: "excludes",
+    question: "Что оплачивается отдельно?",
+    example: "дизайн со стразами от 200 ₽/ноготь",
+    isApplicable: () => true,
+    isFilled: (c) => c.excludes.length > 0,
+    isSpecificEnough: (c) => c.excludes.length > 0 && !isVagueOnly(c.excludes),
+  },
+  {
+    id: "estimate_inputs",
+    // Только для custom pricing — нужны параметры для расчёта цены.
+    question: "Что нужно знать от клиента для точной цены?",
+    example: "текущая длина, нужно ли снятие, форма, нужен ли дизайн",
+    isApplicable: (c) => c.pricing_model === "custom",
+    isFilled: (c) => c.estimate_inputs.length > 0,
+    isSpecificEnough: (c) => c.estimate_inputs.length > 0,
+  },
+  {
+    id: "scout_signals",
+    // КРИТИЧНОЕ ПОЛЕ — без него Scout не может искать клиентов вообще.
+    question: "По каким словам вас ищут клиенты?",
+    example: "«наращивание ногтей [район]», «нарощенные ногти цена [район]»",
+    isApplicable: () => true,
+    isFilled: (c) => c.scout_search_signals.length > 0,
+    isSpecificEnough: (c) => c.scout_search_signals.length > 0 && !isVagueOnly(c.scout_search_signals),
+  },
+  {
+    id: "customer_segments",
+    question: "Кто ваш основной клиент?",
+    example: "женщины 25–40, многие на коррекцию каждые 3 недели",
+    isApplicable: () => true,
+    isFilled: (c) => c.customer_segments.length > 0,
+    isSpecificEnough: (c) => c.customer_segments.length > 0,
+  },
+  {
+    id: "geography",
+    question: "В каком районе/у какого метро принимаете?",
+    example: "«Москва, м. Новослободская»",
+    isApplicable: () => true,
+    isFilled: (c) => c.geography.length > 0,
+    isSpecificEnough: (c) => c.geography.length > 0,
+  },
+  {
+    id: "scout_sources",
+    question: "Где вас чаще всего находят?",
+    example: "ВК-группы по красоте района, 2ГИС",
+    isApplicable: () => true,
+    isFilled: (c) => c.scout_sources.length > 0,
+    isSpecificEnough: (c) => c.scout_sources.length > 0,
+  },
+  {
+    id: "avi_questions",
+    question: "Что Avi должен уточнить перед записью?",
+    example: "дата, снятие старого покрытия, аллергия на материалы, форма ногтей",
+    isApplicable: () => true,
+    isFilled: (c) => c.avi_qualification_questions.length > 0,
+    isSpecificEnough: (c) => c.avi_qualification_questions.length > 0 && !isVagueOnly(c.avi_qualification_questions),
+  },
+  {
+    id: "handoff_rules",
+    question: "Когда передавать диалог вам лично?",
+    example: "сложный дизайн, жалоба, запрос скидки",
+    isApplicable: () => true,
+    isFilled: (c) => c.handoff_to_human_rules.length > 0,
+    isSpecificEnough: (c) => c.handoff_to_human_rules.length > 0,
+  },
+];
+
+/** Производит массив статусов узлов: done / current / upcoming / skipped. */
+function computePlan(card: ProductCard): SetupPlanItem[] {
+  let foundCurrent = false;
+  return SETUP_PLAN.map((node) => {
+    if (!node.isApplicable(card)) {
+      return { id: node.id, question: node.question, example: node.example, status: "skipped" as NodeStatus };
+    }
+    const done = node.isFilled(card) && node.isSpecificEnough(card);
+    if (done) {
+      return { id: node.id, question: node.question, example: node.example, status: "done" as NodeStatus };
+    }
+    if (!foundCurrent) {
+      foundCurrent = true;
+      return { id: node.id, question: node.question, example: node.example, status: "current" as NodeStatus };
+    }
+    return { id: node.id, question: node.question, example: node.example, status: "upcoming" as NodeStatus };
+  });
+}
+
+export function computeNextStep(card: ProductCard | undefined): NextStep | undefined {
+  if (!card) return { id: "service", question: SETUP_PLAN[0].question };
+  const current = computePlan(card).find((n) => n.status === "current");
+  return current ? { id: current.id, question: current.question } : undefined;
+}
+
+export function computeReadiness(card: ProductCard): {
+  readiness_score: number;
+  missing_fields: string[];
+  plan: SetupPlanItem[];
+} {
+  const plan = computePlan(card);
+  const applicableNodes = plan.filter((n) => n.status !== "skipped");
+  const doneNodes = plan.filter((n) => n.status === "done");
+  const missing_fields = plan
+    .filter((n) => n.status === "current" || n.status === "upcoming")
+    .map((n) => n.id);
+  const readiness_score = applicableNodes.length === 0
+    ? 100
+    : doneNodes.length === applicableNodes.length
+      ? 100
+      : Math.max(0, Math.round((doneNodes.length / applicableNodes.length) * 100));
+  return { readiness_score, missing_fields, plan };
 }
 
 /**
  * Проверяет, готов ли профиль к переходу A→B (раздел 7.1.2 ТЗ v9.1):
  *   • хотя бы одна ProductCard с readiness_score >= 80
- *   • лучшая карточка содержит scout_search_signals (иначе Scout не может искать ничего)
+ *   • лучшая карточка содержит scout_search_signals (Scout без них не работает)
  *   • BusinessFoundation содержит company_description, market_type и geography
+ *   Placeholder-значения не засчитываются (utils/placeholders.ts).
  */
 export function checkProfileReadyForDailyAssistant(
   cards: ProductCard[],

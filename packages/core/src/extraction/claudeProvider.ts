@@ -5,6 +5,7 @@ import 'dotenv/config';
 import Anthropic from '@anthropic-ai/sdk';
 import type { ExtractionContext, ExtractionProvider, ExtractionResult } from './types.js';
 import type { ToolAction } from '../schemas/toolAction.js';
+import { SETUP_PLAN } from '../nextStepController.js';
 
 const TOOL_NAME = 'extract_business_intent';
 
@@ -388,8 +389,8 @@ function buildProfileSetupPrompt(
     '## Rules for clarification_text (reminder: plain text only, see CRITICAL RULE above)',
     '  2-3 sentences MAX. Conversational Russian. No markdown (already forbidden above).',
     `  Next missing field: "${missing[0] ?? 'service'}". Form one concrete follow-up question.`,
-    `  "scout_signals" → ask: "По каким словам вас ищут клиенты в интернете? Например: 'маникюр Москва', 'мастер на дому'."`,
-    `  "в смысле?" → explain briefly what was asked, give one short example, re-ask.`,
+    `  "scout_signals" → ask: "${SETUP_PLAN.find(n => n.id === 'scout_signals')!.question} Например: ${SETUP_PLAN.find(n => n.id === 'scout_signals')!.example}."`,
+    `  "в смысле?" → explain briefly what was asked, give one short example (like: ${SETUP_PLAN.find(n => n.id === missing[0] as string) ? SETUP_PLAN.find(n => n.id === missing[0])!.example : 'конкретный вариант из их ниши'}), re-ask.`,
     `  "подскажи/помоги" → one concrete example from their service type, then re-ask.`,
     `  Confused/off-topic → one short acknowledgement, then ask the next missing field directly.`,
     '',

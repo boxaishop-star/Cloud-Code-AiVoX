@@ -6,6 +6,7 @@ import {
   ClaudeExtractionProvider,
   getPrismaClient,
   getRoleFromClerkUser,
+  computeReadiness,
   type AdminDataStore,
 } from '@aivox/core';
 
@@ -108,6 +109,37 @@ app.get('/api/daily-summary', async (req, res) => {
       relationship_cards_count: relationshipCards.length,
       readiness_score: bestReadiness,
     });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+// Раздел 7.1.2 ТЗ v9.1: план настройки карточки с вопросами, примерами и статусами.
+// Никакой логики статусов на фронте — бэкенд считает и отдаёт готовый массив.
+app.get('/api/setup-plan', async (req, res) => {
+  const { userId } = getAuth(req);
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const tenantId = req.query.tenant_id as string | undefined;
+  if (!tenantId) {
+    res.status(400).json({ error: 'tenant_id query parameter is required' });
+    return;
+  }
+
+  try {
+    const store = new PostgresStore(getPrismaClient());
+    const cards = await store.getProductCards(tenantId);
+    if (cards.length === 0) {
+      res.json({ plan: [], bestCard: null });
+      return;
+    }
+    const bestCard = cards.reduce((b, c) => c.readiness_score > b.readiness_score ? c : b);
+    const { readiness_score, missing_fields, plan } = computeReadiness(bestCard);
+    res.json({ plan, readiness_score, missing_fields, bestCard: { id: bestCard.id, name: bestCard.name, service_line: bestCard.service_line } });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });

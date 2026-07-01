@@ -7,6 +7,8 @@ export * from "./intentEngine.js";
 export * from "./validation.js";
 export * from "./toolLayer.js";
 export * from "./nextStepController.js";
+export * from "./utils/placeholders.js";
+export * from "./utils/vaguePhrases.js";
 export * from "./orchestrator.js";
 export * from "./store.js";
 export * from "./extraction/types.js";
