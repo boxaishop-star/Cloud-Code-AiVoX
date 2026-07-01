@@ -1,5 +1,5 @@
 import { UserButton } from '@clerk/nextjs';
-import SetupChat from '@/components/SetupChat';
+import SetupContent from '@/components/SetupContent';
 
 export default function SetupPage() {
   return (
@@ -12,7 +12,7 @@ export default function SetupPage() {
         </div>
         <UserButton afterSignOutUrl="/sign-in" />
       </header>
-      <SetupChat />
+      <SetupContent />
     </div>
   );
 }

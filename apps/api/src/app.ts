@@ -181,9 +181,7 @@ app.post('/api/activate-daily-assistant', async (req, res) => {
       if (cards.length === 0) {
         reasons.push('нет ни одной карточки услуги');
       } else {
-        const best = cards.reduce((a, b) =>
-          computeReadiness(a).readiness_score >= computeReadiness(b).readiness_score ? a : b
-        );
+        const best = pickBestCard(cards)!;
         const { readiness_score } = computeReadiness(best);
         if (readiness_score < 80) reasons.push(`readiness_score = ${readiness_score} (нужно ≥ 80)`);
         if (best.scout_search_signals.length === 0) reasons.push('не заполнены scout_search_signals');

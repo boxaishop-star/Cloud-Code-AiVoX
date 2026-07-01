@@ -1,7 +1,12 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 
-const isProtectedRoute = createRouteMatcher(['/setup(.*)', '/api/chat(.*)']);
+const isProtectedRoute = createRouteMatcher([
+  '/setup(.*)',
+  '/api/chat(.*)',
+  '/api/setup-plan(.*)',
+  '/api/activate-daily-assistant(.*)',
+]);
 
 export default clerkMiddleware(async (auth, req) => {
   // Root route: explicit middleware-level redirect (avoids RSC 500 + protect-rewrite 404)

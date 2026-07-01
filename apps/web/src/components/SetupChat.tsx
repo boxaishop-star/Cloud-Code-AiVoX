@@ -99,7 +99,7 @@ function SendIcon() {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function SetupChat() {
+export default function SetupChat({ onAssistantReply }: { onAssistantReply?: () => void }) {
   const [messages, setMessages] = useState<Message[]>([WELCOME]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -159,6 +159,7 @@ export default function SetupChat() {
           nextStep: nextStepText,
         },
       ]);
+      onAssistantReply?.();
     } catch {
       setError('Не удалось связаться с сервером. Проверьте подключение.');
     } finally {
