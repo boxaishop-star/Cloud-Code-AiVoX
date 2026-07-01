@@ -18,6 +18,15 @@ function makeOrchestrator() {
       intent: "business_setup",
       confidence: 0.94,
       proposed_actions: [
+        // Foundation действие идёт первым — projected foundation check разблокирует карточку.
+        {
+          type: "upsert_business_foundation",
+          payload: {
+            company_description: "Строительство фундаментов для частных домов",
+            market_type: "B2C",
+            geography: ["Россия"],
+          },
+        },
         {
           type: "upsert_product_card",
           payload: {
@@ -69,10 +78,10 @@ describe("Golden test: ленточный фундамент (раздел 22.1 
     expect(names).not.toContain("Фундаменты");
   });
 
-  it('ответ начинается с "Понял. Создал и заполнил карточку"', async () => {
+  it('ответ содержит "Понял. Создал и заполнил карточку" (может начинаться с transition message)', async () => {
     const orch = makeOrchestrator();
     const result = await orch.process({ userMessage: RICH_MESSAGE, tenant_id: "biz_test_4" });
-    expect(result.assistantResponse.startsWith("Понял. Создал и заполнил карточку")).toBe(true);
+    expect(result.assistantResponse).toContain("Понял. Создал и заполнил карточку");
   });
 
   it("readiness_score корректен относительно missing_fields (раздел 22.4 ТЗ)", async () => {

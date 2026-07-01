@@ -1,6 +1,7 @@
 import { classifyIntentLocally } from "./intentEngine.js";
 import { validateProposedActions, sanitizeForResponse } from "./validation.js";
 import { computeNextStep, computeReadiness, checkProfileReadyForDailyAssistant } from "./nextStepController.js";
+import { isRealValue, hasRealValue } from "./utils/placeholders.js";
 import type { DataStore } from "./store.js";
 import type { ExtractionProvider } from "./extraction/types.js";
 import type { ToolAction, ToolActionResult } from "./schemas/toolAction.js";
@@ -14,6 +15,8 @@ import type { AssistantStage } from "./schemas/businessFoundation.js";
 export interface OrchestratorInput {
   userMessage: string;
   tenant_id: string;
+  /** When set, orchestrator treats this service as the one currently being built. */
+  activeServiceLine?: string;
   developerMode?: boolean;
 }
 
@@ -28,6 +31,30 @@ export interface OrchestratorResult {
   /** Текущий этап ассистента — отражает состояние ПОСЛЕ обработки сообщения. */
   assistant_stage: AssistantStage;
 }
+
+// ── Foundation helpers ─────────────────────────────────────────────────────────
+
+/** Раздел 7.1.2 ТЗ v9.1: минимум для снятия блока на создание карточек.
+ *  Placeholder-значения ("unknown", "<UNKNOWN>", "-" и т.п.) не засчитываются —
+ *  фильтрация делегирована в utils/placeholders.ts (единый список для обоих gate'ов). */
+function isFoundationComplete(foundation: Record<string, unknown> | null | undefined): boolean {
+  if (!foundation) return false;
+  const f = foundation as Record<string, unknown>;
+  if (!isRealValue(f.company_description)) return false;
+  if (!f.market_type) return false;
+  return hasRealValue(f.geography as string[] | undefined);
+}
+
+/** Следующий вопрос для сбора недостающих полей BusinessFoundation. */
+function nextFoundationQuestion(foundation: Record<string, unknown> | null | undefined): string {
+  const f = (foundation ?? {}) as Record<string, unknown>;
+  if (!f.company_description) return "Расскажите подробнее о своём бизнесе — чем занимаетесь и кто ваши клиенты?";
+  if (!f.market_type) return "Вы работаете с частными лицами (B2C) или с компаниями (B2B)?";
+  if (!(f.geography as string[] | undefined)?.length) return "В каких городах или регионах работаете?";
+  return "Расскажите об основной услуге — как она называется?";
+}
+
+// ── Orchestrator ───────────────────────────────────────────────────────────────
 
 export class BusinessAssistantOrchestrator {
   constructor(private store: DataStore, private extractor: ExtractionProvider) {}
@@ -57,6 +84,17 @@ export class BusinessAssistantOrchestrator {
 
     const currentStage: AssistantStage = (foundation as any)?.assistant_stage ?? "profile_setup";
 
+    // ── Раздел 7.1.2 ТЗ v9.1: Foundation gate ─────────────────────────────────
+    // Блокирует создание ProductCard до тех пор, пока не собраны
+    // company_description + market_type + geography. Проверяется ДО extraction.
+    const foundationComplete = isFoundationComplete(foundation);
+
+    // Активная услуга: либо передана UI явно, либо вычисляется как лучшая карточка в profile_setup.
+    const derivedActiveServiceLine = input.activeServiceLine
+      ?? (currentStage === "profile_setup" && existingCards.length > 0
+        ? existingCards.reduce((b, c) => c.readiness_score > b.readiness_score ? c : b).service_line
+        : undefined);
+
     // Передаём missing_fields лучшей карточки в контекст провайдера —
     // модель точно знает, каких данных не хватает, и не повторяет одни вопросы.
     const bestExisting = existingCards.length > 0
@@ -72,10 +110,29 @@ export class BusinessAssistantOrchestrator {
       productCatalog: existingCards,
       assistant_stage: currentStage,
       missing_fields: contextMissingFields,
+      foundationComplete,
+      activeServiceLine: derivedActiveServiceLine,
     });
 
+    // Projected foundation: если в этом же батче есть foundation-акция,
+    // и она закрывает все обязательные поля — снимаем gate для карточки.
+    // Позволяет создать foundation + первую карточку в одном сообщении,
+    // когда пользователь сразу дал все данные.
+    const projectedFoundation = extraction.proposed_actions
+      .filter((a) => a.type === "upsert_business_foundation")
+      .reduce(
+        (acc, a) => ({ ...acc, ...(a.payload as Record<string, unknown>) }),
+        { ...((foundation ?? {}) as Record<string, unknown>) },
+      );
+    const effectiveFoundationComplete = isFoundationComplete(projectedFoundation);
+
     const existingCategories = [...new Set(existingCards.map((c) => c.category))];
-    const { validActions, errors } = validateProposedActions(extraction.proposed_actions, existingCards, existingCategories);
+    const { validActions, errors, disambiguationNeeded } = validateProposedActions(
+      extraction.proposed_actions,
+      existingCards,
+      existingCategories,
+      { foundationComplete: effectiveFoundationComplete, activeServiceLine: derivedActiveServiceLine },
+    );
 
     const appliedActions = await Promise.all(validActions.map((a) => this.store.applyAction(a)));
 
@@ -101,8 +158,7 @@ export class BusinessAssistantOrchestrator {
       ? !existingCards.some((c) => c.service_line === touchedServiceLine)
       : false;
 
-    // Если нет явного updatedCard, пробуем подтянуть следующий шаг из лучшей существующей карточки
-    // (так ответ остаётся контекстным вместо генерик-фолбека).
+    // Если нет явного updatedCard, пробуем подтянуть следующий шаг из лучшей существующей карточки.
     const bestFreshCard = freshCards.length > 0
       ? freshCards.reduce((b, c) => c.readiness_score > b.readiness_score ? c : b)
       : undefined;
@@ -114,13 +170,13 @@ export class BusinessAssistantOrchestrator {
     let finalStage: AssistantStage = currentStage;
     let stageTransitionMessage: string | undefined;
 
+    const freshFoundation = await this.store.getFoundation(input.tenant_id);
+
     if (currentStage === "profile_setup") {
-      // Пересчитываем readiness для всех свежих карточек.
       const freshCardsWithReadiness = freshCards.map((c) => {
         const r = computeReadiness(c);
         return { ...c, ...r };
       });
-      const freshFoundation = await this.store.getFoundation(input.tenant_id);
       if (checkProfileReadyForDailyAssistant(freshCardsWithReadiness, freshFoundation)) {
         await this.store.applyAction({
           type: "upsert_business_foundation",
@@ -133,14 +189,42 @@ export class BusinessAssistantOrchestrator {
       }
     }
 
-    const baseResponse = this.renderResponse(extraction.intent, updatedCard, appliedActions, nextStep, extraction.clarification_text, currentStage, wasNewCard);
+    // ── Формирование ответа ────────────────────────────────────────────────────
+
+    // Свежее состояние foundation после применения акций.
+    const freshFoundationComplete = isFoundationComplete(freshFoundation);
+    const foundationJustCompleted = !foundationComplete && freshFoundationComplete;
+    const foundationApplied = appliedActions.some(
+      (r) => r.action.type === "upsert_business_foundation" && r.applied,
+    );
+
+    let baseResponse: string;
+
+    // Приоритет 1: disambiguation — пользователь упомянул другую услугу, нужно уточнение.
+    if (disambiguationNeeded && derivedActiveServiceLine && !updatedCard) {
+      const activeCard = freshCards.find((c) => c.service_line === derivedActiveServiceLine);
+      const activeName = activeCard?.name ?? derivedActiveServiceLine;
+      baseResponse = extraction.clarification_text
+        ?? `Уточните: это дополнение к «${sanitizeForResponse(activeName)}» или вы хотите добавить отдельную новую услугу?`;
+    // Приоритет 2: foundation только что закрылась — переходим к сбору карточки.
+    } else if (foundationJustCompleted && !updatedCard && !extraction.clarification_text) {
+      baseResponse = "Отлично, записал основное о бизнесе. Теперь расскажите об основной услуге — как она называется?";
+    // Приоритет 3: foundation обновлена, но ещё не закрыта — спрашиваем следующее обязательное поле.
+    } else if (foundationApplied && !freshFoundationComplete && !updatedCard && !extraction.clarification_text) {
+      baseResponse = nextFoundationQuestion(freshFoundation);
+    // Приоритет 4: стандартный рендеринг.
+    } else {
+      baseResponse = this.renderResponse(extraction.intent, updatedCard, appliedActions, nextStep, extraction.clarification_text, currentStage, wasNewCard);
+    }
+
     const assistantResponse = stageTransitionMessage
       ? `${stageTransitionMessage}\n\n${baseResponse}`
       : baseResponse;
 
-    // Не дублируем nextStep когда clarification_text уже содержит полный ответ модели —
-    // иначе UI рисует "Следующий вопрос" отдельным блоком поверх уже заданного вопроса.
-    const resultNextStep = (!updatedCard && extraction.clarification_text) ? undefined : nextStep;
+    // Yellow block появляется ТОЛЬКО рядом с карточкой услуги — во всех остальных случаях
+    // (clarification, foundation вопросы, no-card) вопрос уже встроен в текст ответа,
+    // и дублировать его отдельным блоком нельзя.
+    const resultNextStep = updatedCard ? nextStep : undefined;
 
     return {
       assistantResponse,
@@ -160,8 +244,7 @@ export class BusinessAssistantOrchestrator {
   }
 
   // Раздел 20.2, 22.2 ТЗ: ответ собирается из реальных сохранённых данных через
-  // sanitizeForResponse — поэтому "[object Object]" архитектурно невозможен здесь,
-  // а не "проверяется тестом постфактум".
+  // sanitizeForResponse — поэтому "[object Object]" архитектурно невозможен здесь.
   private renderResponse(
     intent: string,
     card: ProductCard | undefined,
@@ -173,11 +256,9 @@ export class BusinessAssistantOrchestrator {
   ): string {
     if (!card) {
       if (clarificationText) return clarificationText;
-      // В daily_assistant режиме не повторяем инструкцию по заполнению профиля.
       if (stage === "daily_assistant") {
         return nextStep ? nextStep.question : "Слушаю. Чем могу помочь?";
       }
-      // Если есть следующий шаг из существующей карточки — используем его, не generic fallback.
       if (nextStep) return nextStep.question;
       return "Расскажите о вашей услуге: название, цену и что входит в стоимость — например, «Маникюр, 1500 рублей, входит снятие лака».";
     }

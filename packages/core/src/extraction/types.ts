@@ -14,12 +14,18 @@ export interface ExtractionContext {
   tenant_id: string;
   businessFoundation: Record<string, unknown>;
   productCatalog: Record<string, unknown>[];
+  /** Service line currently being built — model must not switch to another card until this one is complete. */
   activeServiceLine?: string;
   activeFactId?: string;
   /** Current onboarding stage (раздел 7.1.1 ТЗ v9.0). */
   assistant_stage?: 'profile_setup' | 'daily_assistant';
   /** Fields still missing from the best product card — passed so the model knows what to ask next. */
   missing_fields?: string[];
+  /**
+   * True when BusinessFoundation has company_description + market_type + geography (раздел 7.1.2 ТЗ v9.1).
+   * When false the model MUST collect foundation data first; upsert_product_card is blocked by the validator.
+   */
+  foundationComplete?: boolean;
 }
 
 export interface ExtractionResult {

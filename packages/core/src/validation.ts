@@ -4,6 +4,8 @@ import type { ProductCard } from "./schemas/productCard.js";
 export interface ValidationResult {
   validActions: ToolAction[];
   errors: string[];
+  /** True when a upsert_product_card was rejected solely because it targeted a different service_line than activeServiceLine. */
+  disambiguationNeeded: boolean;
 }
 
 // Слова-маркеры buyer_type, которые НЕ должны встречаться в поле segment, и наоборот —
@@ -21,12 +23,44 @@ export function validateProposedActions(
   actions: ToolAction[],
   existingProductCards: ProductCard[],
   existingCategories: string[],
+  opts?: {
+    /** Foundation gate (раздел 7.1.2 ТЗ v9.1): if false, upsert_product_card is blocked. */
+    foundationComplete?: boolean;
+    /** When set, upsert_product_card for a different service_line triggers disambiguation. */
+    activeServiceLine?: string;
+  },
 ): ValidationResult {
   const errors: string[] = [];
   const validActions: ToolAction[] = [];
+  let disambiguationNeeded = false;
 
   for (const action of actions) {
     if (action.type === "upsert_product_card" || action.type === "update_product_card") {
+      // Gate 1: BusinessFoundation must be complete before product cards are created (раздел 7.1.2 ТЗ v9.1).
+      if (opts?.foundationComplete === false) {
+        errors.push(
+          `Отклонено ${action.type}: BusinessFoundation не заполнен ` +
+          `(нужны company_description, market_type, geography) — ` +
+          `создание карточки услуги до закрытия профиля запрещено (раздел 7.1.2 ТЗ v9.1)`,
+        );
+        continue;
+      }
+
+      // Gate 2: Service line focus — only the active card can be updated while it is in progress.
+      const incomingServiceLine = (action.payload as Record<string, unknown>).service_line as string | undefined;
+      if (
+        opts?.activeServiceLine &&
+        incomingServiceLine &&
+        incomingServiceLine !== opts.activeServiceLine &&
+        action.type === "upsert_product_card"
+      ) {
+        disambiguationNeeded = true;
+        errors.push(
+          `Отклонено upsert_product_card: service_line="${incomingServiceLine}" не совпадает с активной услугой ` +
+          `"${opts.activeServiceLine}" — завершите текущую карточку или явно начните новую (раздел 7.1.2 ТЗ v9.1)`,
+        );
+        continue;
+      }
       const { name, category, service_line, price } = action.payload as Record<string, unknown>;
 
       // Правило раздела 8.1, 2.2 ТЗ: категория не может быть услугой.
@@ -84,7 +118,7 @@ export function validateProposedActions(
     validActions.push(action);
   }
 
-  return { validActions, errors };
+  return { validActions, errors, disambiguationNeeded };
 }
 
 // Защита от "мусора" в ответе пользователю — раздел 14, 22.2 ТЗ ("[object Object]"

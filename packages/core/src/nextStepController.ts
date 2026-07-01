@@ -1,5 +1,6 @@
 import type { ProductCard } from "./schemas/productCard.js";
 import type { BusinessFoundation } from "./schemas/businessFoundation.js";
+import { isRealValue, hasRealValue } from "./utils/placeholders.js";
 
 // Раздел 18, ТЗ v3.0 — таблица приоритетов без изменений по сути.
 export interface NextStep {
@@ -56,8 +57,9 @@ export function checkProfileReadyForDailyAssistant(
   if (bestCard.readiness_score < 80) return false;
   // Scout не может работать без ключевых слов поиска — жёсткое условие перехода.
   if (bestCard.scout_search_signals.length === 0) return false;
-  if (!foundation?.company_description) return false;
+  // Placeholder-значения не засчитываются — тот же фильтр, что в isFoundationComplete.
+  if (!isRealValue(foundation?.company_description)) return false;
   if (!foundation?.market_type) return false;
-  if (!foundation?.geography?.length) return false;
+  if (!hasRealValue(foundation?.geography)) return false;
   return true;
 }

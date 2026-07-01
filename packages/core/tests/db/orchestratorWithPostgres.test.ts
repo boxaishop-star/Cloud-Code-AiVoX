@@ -37,6 +37,15 @@ function makeExtractor() {
       intent: "business_setup",
       confidence: 0.94,
       proposed_actions: [
+        // Foundation идёт первым — projected check разблокирует карточку в том же батче.
+        {
+          type: "upsert_business_foundation",
+          payload: {
+            company_description: "Строительство фундаментов для частных домов",
+            market_type: "B2C",
+            geography: ["Россия"],
+          },
+        },
         {
           type: "upsert_product_card",
           payload: {
@@ -105,11 +114,12 @@ describe('BusinessAssistantOrchestrator + PostgresStore (раздел 20.1 ТЗ)
     expect(cards.find((c) => c.service_line === 'strip_foundation')?.price).toBe(8000);
   });
 
-  it('ответ начинается с "Понял. Создал/Обновил карточку"', async (ctx) => {
+  it('ответ содержит "Понял. Создал/Обновил карточку" (может начинаться с transition message)', async (ctx) => {
     if (!dbAvailable) return ctx.skip();
     const orch = new BusinessAssistantOrchestrator(store, makeExtractor());
     const result = await orch.process({ userMessage: RICH_MESSAGE, tenant_id: TENANT_ID });
     // При первом прогоне — "Создал и заполнил", при повторных (карточка уже есть) — "Обновил".
-    expect(result.assistantResponse).toMatch(/^Понял\. (Создал и заполнил|Обновил) карточку/);
+    // При полностью заполненном профиле может быть prepended transition message.
+    expect(result.assistantResponse).toMatch(/Понял\. (Создал и заполнил|Обновил) карточку/);
   });
 }, 30000);

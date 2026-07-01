@@ -118,9 +118,13 @@ const EXTRACTION_TOOL: Anthropic.Tool = {
       clarification_text: {
         type: 'string',
         description:
-          'REQUIRED when proposed_actions is empty. Write a SHORT (2-3 sentences), direct, conversational reply in Russian. ' +
-          'NO markdown: no **bold**, no bullet lists with dashes or asterisks, no headers. ' +
-          'Plain text only. Address exactly what the user said — do not enumerate the whole catalog.',
+          'REQUIRED when proposed_actions is empty. Also REQUIRED after upsert_business_foundation when foundation is still incomplete. ' +
+          'Write a SHORT (1-2 sentences), direct, conversational reply in Russian. ' +
+          'STRICT: NO markdown — no **bold**, no *italic*, no bullet lists with - or *, no headers. ' +
+          'Plain text ONLY. ' +
+          'BAD: "**Понял!** Вот что нужно:\\n- Где работаете\\n- Кто клиенты" ' +
+          'GOOD: "Понял. Подскажите, в каких городах вы работаете?" ' +
+          'Address exactly what the user said — do not enumerate the whole catalog.',
       },
     },
   },
@@ -221,14 +225,88 @@ function buildProfileSetupPrompt(
 
   lines.push(
     '## Current stage: PROFILE SETUP (Этап A)',
-    'Help the user describe their business services and fill in a product card.',
+    'Help the user describe their business and fill in a product card.',
     '',
   );
+
+  // ── CASE A: Foundation not yet complete (раздел 7.1.2 ТЗ v9.1) ──────────
+  // The validator BLOCKS upsert_product_card until foundation has
+  // company_description + market_type + geography. Focus on collecting these first.
+  if (context.foundationComplete === false) {
+    lines.push(
+      '## BLOCKING CONDITION: BusinessFoundation not complete',
+      'company_description, market_type, and geography are REQUIRED before any service card.',
+      'Your ONLY allowed action is upsert_business_foundation.',
+      'DO NOT output upsert_product_card — it will be rejected by the validator.',
+      '',
+      'Extract from the user message:',
+      '  • company_description — what the business does (1-2 sentences, from user words)',
+      '  • market_type         — "B2C" (serves individuals) | "B2B" (serves companies)',
+      '                          Infer: "маникюр/стрижка/ремонт квартиры" → B2C;',
+      '                          "поставляем/консультируем компании" → B2B.',
+      '                          Do NOT ask "B2B or B2C" literally — always infer.',
+      '  • geography           — array of cities/regions the user mentioned',
+      '',
+      '## NEVER use placeholders',
+      'If the user did NOT provide a value, OMIT the field entirely — do NOT fill it with',
+      '"<UNKNOWN>", "unknown", "не указано", "-", or any invented text.',
+      'A missing field triggers a follow-up question. A fake field silently bypasses the gate.',
+      'BAD:  { "geography": ["<UNKNOWN>"] }',
+      'GOOD: omit geography from payload, set clarification_text asking for the city.',
+      '',
+      'If any of these are MISSING from the message, set clarification_text.',
+      'Priority order for what to ask:',
+      '  1. company_description — if not yet known',
+      '  2. geography           — if not mentioned',
+      '  (market_type: always infer, never ask directly)',
+      '',
+      '## STRICT MARKDOWN PROHIBITION for clarification_text',
+      '  Plain text only. NO **bold**, NO *italic*, NO bullet lists, NO dashes as list markers.',
+      '  BAD:  "**Понял!** Расскажите:\n- где вы работаете\n- кто ваши клиенты"',
+      '  GOOD: "Понял, вы занимаетесь строительством. Подскажите, в каких городах работаете?"',
+      '  Keep it 1-2 sentences MAX.',
+      '',
+      '## IMPORTANT',
+      '  • Never include tenant_id in the payload — the system injects it automatically.',
+      '',
+      '---',
+      `Tenant: ${context.tenant_id}`,
+      '',
+      'Business foundation:',
+      foundation,
+      '',
+      `Product catalog (${context.productCatalog.length} items):`,
+      catalog,
+    );
+    return;
+  }
+
+  // ── CASE B: Foundation complete — collect service card ────────────────────
+
+  lines.push(
+    '## CRITICAL RULE: Plain text ONLY — no markdown anywhere',
+    'This applies to ALL output fields: clarification_text, next_step.question, everywhere.',
+    'NO **bold**, NO *italic*, NO bullet lists with - or *, NO ## headers, NO backticks.',
+    'BAD:  "**Понял!** Вот что нужно:\\n- Как называется услуга?\\n- Сколько стоит?"',
+    'GOOD: "Понял. Скажите, как называется услуга и сколько она стоит?"',
+    '',
+  );
+
+  if (context.activeServiceLine) {
+    lines.push(
+      `## Active service: "${context.activeServiceLine}"`,
+      'You are currently filling THIS service card. Do NOT switch to a different service_line.',
+      'If the user mentions something that sounds like a DIFFERENT new service:',
+      '  → set proposed_actions: [] and clarification_text:',
+      `    "Это уточнение к текущей услуге или вы хотите добавить отдельную новую услугу?"`,
+      '',
+    );
+  }
 
   if (missing.length > 0) {
     lines.push(
       `## Already filled. Still missing from the best card: [${missing.join(', ')}]`,
-      'Use this list to ask the NEXT relevant question — do not re-ask what is already filled.',
+      'Ask ONLY the NEXT missing field — do not re-ask what is already filled.',
       '',
     );
   }
@@ -237,8 +315,8 @@ function buildProfileSetupPrompt(
     '## Your task',
     'Analyse the user message and call extract_business_intent with:',
     '  • intent     — choose ONE:',
-    '      "business_setup"  — user is describing/adding a service that is NOT yet in the product catalog',
-    '      "product_update"  — user is enriching a service that ALREADY exists in the product catalog below',
+    '      "business_setup"  — user is describing/adding a service NOT yet in the product catalog',
+    '      "product_update"  — user is enriching a service that ALREADY exists in the catalog below',
     '      "inquiry"         — user asks a question without setting up a service',
     '      "small_talk"      — greeting or off-topic',
     '  • confidence — 0–1',
@@ -246,71 +324,61 @@ function buildProfileSetupPrompt(
     '  • next_step  — optional follow-up question ONLY to enrich an already-created card',
     '',
     '## Rule: create upsert_product_card immediately on first mention of a service',
-    'Do NOT wait for a "complete" description. Do NOT replace the action with a next_step question.',
+    'Do NOT wait for a complete description. Do NOT replace the action with next_step.',
     'If the user mentions any service or product (even briefly), output upsert_product_card NOW.',
     '',
+    '## Also output upsert_business_foundation when the user mentions company/market/geography data.',
+    'Always include it BEFORE upsert_product_card in proposed_actions.',
+    '',
     '### Required payload fields for upsert_product_card (all five are mandatory):',
-    '  id            — snake_case latin slug, e.g. "manicure_classic", "laptop_repair", "tax_consult"',
+    '  id            — snake_case latin slug, e.g. "manicure_classic", "laptop_repair"',
     '  name          — service name as the user stated it (in Russian if they used Russian)',
-    '  category      — infer from context if not explicit; e.g. "Красота и уход", "Ремонт техники",',
+    '  category      — infer from context; e.g. "Красота и уход", "Ремонт техники",',
     '                  "Юридические услуги", "Строительство", "Общественное питание"',
     '  service_line  — same value as id',
-    '  pricing_model — pick the closest: "fixed" (per visit/item/hour), "from_price" (starting price),',
-    '                  "per_m3" (volume-based, e.g. concrete), "custom" (complex/negotiated)',
-    '                  When pricing_model is "custom", ALSO fill estimate_inputs[] with 2-3 typical',
-    '                  parameters the user would need to quote a price (e.g. for renovation:',
-    '                  ["площадь квартиры", "тип ремонта"]; for consulting: ["объём задачи"]).',
+    '  pricing_model — "fixed" | "from_price" | "per_m3" | "custom"',
+    '                  When "custom", fill estimate_inputs[] with 2-3 parameters needed to quote price.',
     '',
-    '### Optional payload fields — fill only when the user explicitly provided the value.',
-    '### IMPORTANT: geography, customer_segments, includes, excludes, and all other list fields',
-    '### MUST be arrays of strings, e.g. ["Москва"] not "Москва".',
+    '### Optional payload fields — fill ONLY when user explicitly stated the value:',
     '  price, unit, currency,',
-    '  includes[]                — what is included in price',
-    '  excludes[]                — what is NOT included',
-    '  estimate_inputs[]         — inputs needed to estimate price',
-    '  customer_segments[]       — target customer groups',
-    '  geography[]               — regions/cities served',
-    '  scout_search_signals[]    — keywords for lead search',
-    '  scout_sources[]           — channels to search leads in',
-    '  avi_qualification_questions[] — questions Avi asks to qualify leads',
-    '  handoff_to_human_rules[]  — rules for escalating to a human',
+    '  includes[], excludes[], estimate_inputs[], customer_segments[], geography[],',
+    '  scout_search_signals[], scout_sources[], avi_qualification_questions[], handoff_to_human_rules[]',
+    '  (ALL list fields must be arrays of strings, e.g. ["Москва"] not "Москва")',
     '',
-    '### Examples across different industries',
+    '### Examples',
     '',
-    'Example 1 — Beauty (short message):',
+    'Example 1 — Beauty (short first message):',
     '  User: "Делаю маникюр, цена 1500 рублей"',
-    '  → proposed_actions: [{ "type": "upsert_product_card", "payload": {',
-    '      "id": "manicure_classic", "name": "Классический маникюр",',
-    '      "category": "Красота и уход", "service_line": "manicure_classic",',
-    '      "pricing_model": "fixed", "price": 1500, "currency": "RUB" } }]',
+    '  → proposed_actions: [',
+    '      { "type": "upsert_business_foundation", "payload": { "company_description": "Маникюр", "market_type": "B2C" } },',
+    '      { "type": "upsert_product_card", "payload": { "id": "manicure_classic",',
+    '          "name": "Классический маникюр", "category": "Красота и уход",',
+    '          "service_line": "manicure_classic", "pricing_model": "fixed",',
+    '          "price": 1500, "currency": "RUB" } }',
+    '    ]',
     '',
-    'Example 2 — Tech repair (price range, geography as array):',
-    '  User: "Ремонт ноутбуков от 500 рублей, работаем в Москве и Питере"',
-    '  → proposed_actions: [{ "type": "upsert_product_card", "payload": {',
-    '      "id": "laptop_repair", "name": "Ремонт ноутбука",',
-    '      "category": "Ремонт техники", "service_line": "laptop_repair",',
-    '      "pricing_model": "from_price", "price": 500, "currency": "RUB",',
-    '      "geography": ["Москва", "Санкт-Петербург"] } }]',
-    '',
-    'Example 3 — Consulting (no price given):',
-    '  User: "Консультирую ИП по налогам"',
-    '  → proposed_actions: [{ "type": "upsert_product_card", "payload": {',
-    '      "id": "tax_consult_ip", "name": "Консультация по налогам для ИП",',
-    '      "category": "Юридические и финансовые услуги", "service_line": "tax_consult_ip",',
-    '      "pricing_model": "custom" } }]',
+    'Example 2 — Construction (rich first message):',
+    '  User: "Строим ленточные фундаменты, 8000р/м3, работаем по России"',
+    '  → proposed_actions: [',
+    '      { "type": "upsert_business_foundation", "payload": { "company_description": "Строительство фундаментов",',
+    '          "market_type": "B2C", "geography": ["Россия"] } },',
+    '      { "type": "upsert_product_card", "payload": { "id": "strip_foundation",',
+    '          "name": "Ленточный фундамент", "category": "Строительство",',
+    '          "service_line": "strip_foundation", "pricing_model": "per_m3",',
+    '          "price": 8000, "currency": "RUB", "unit": "m3", "geography": ["Россия"] } }',
+    '    ]',
     '',
     '## When proposed_actions is empty',
-    'If the user is confused, asks "в смысле?", "подскажи", "не понимаю", "как?", or sends something',
-    'that cannot be mapped to a business action — set proposed_actions: [] and write clarification_text.',
+    'If user is confused ("в смысле?", "подскажи", "не понимаю", or off-topic):',
+    'set proposed_actions: [] and write clarification_text.',
     '',
-    '  Rules for clarification_text:',
-    '  • 2-3 sentences MAX. Conversational Russian. NO markdown — no **, no dashes, no bullet lists.',
-    '  • Address exactly what the user said. Do NOT enumerate the whole catalog.',
-    `  • Next missing field: "${missing[0] ?? 'name'}". Use this to form one concrete follow-up question.`,
-    `  • "scout_signals" → ask: "По каким словам вас обычно ищут клиенты? Например: '${context.productCatalog[0]?.name ?? 'услуга'} [город]', 'найти мастера', 'заказать [услугу]'."`,
-    `  • "в смысле?" → explain in one sentence what was being asked, give one short example, re-ask.`,
-    `  • "подскажи/помоги" → one concrete example from their service type, then re-ask the question.`,
-    `  • Confused/off-topic → one short acknowledgement, then ask the next missing field directly.`,
+    '## Rules for clarification_text (reminder: plain text only, see CRITICAL RULE above)',
+    '  2-3 sentences MAX. Conversational Russian. No markdown (already forbidden above).',
+    `  Next missing field: "${missing[0] ?? 'service'}". Form one concrete follow-up question.`,
+    `  "scout_signals" → ask: "По каким словам вас ищут клиенты в интернете? Например: 'маникюр Москва', 'мастер на дому'."`,
+    `  "в смысле?" → explain briefly what was asked, give one short example, re-ask.`,
+    `  "подскажи/помоги" → one concrete example from their service type, then re-ask.`,
+    `  Confused/off-topic → one short acknowledgement, then ask the next missing field directly.`,
     '',
     '## IMPORTANT',
     '  • Never include tenant_id in the payload — the system injects it automatically.',
@@ -321,7 +389,6 @@ function buildProfileSetupPrompt(
     `Tenant: ${context.tenant_id}`,
   );
 
-  if (context.activeServiceLine) lines.push(`Active service line: ${context.activeServiceLine}`);
   if (context.activeFactId) lines.push(`Active fact ID: ${context.activeFactId}`);
 
   lines.push(
