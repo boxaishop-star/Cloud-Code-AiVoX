@@ -1,5 +1,5 @@
 import type { ProductCard } from "./schemas/productCard.js";
-import type { BusinessFoundation } from "./schemas/businessFoundation.js";
+import type { BusinessFoundation, AssistantStage } from "./schemas/businessFoundation.js";
 import { isRealValue, hasRealValue } from "./utils/placeholders.js";
 import { isVagueOnly } from "./utils/vaguePhrases.js";
 
@@ -214,6 +214,14 @@ export function resolveNichePack(card?: ProductCard, foundation?: BusinessFounda
 
 export type NodeStatus = "done" | "current" | "upcoming" | "skipped";
 
+/** Раздел 7.1.2 ТЗ v9.1: сводная секция плана настройки для UI. */
+export interface SectionSummary {
+  id: string; // "business" | "services" | "pricing" | "scope" | "estimate" | "geography" | "clients" | "avi" | "scout" | "launch"
+  label: string;
+  status: NodeStatus;
+  nodeIds: string[];
+}
+
 export interface SetupPlanItem {
   id: string;
   question: string;
@@ -311,4 +319,73 @@ export function checkProfileReadyForDailyAssistant(
   if (!foundation?.market_type) return false;
   if (!hasRealValue(foundation?.geography)) return false;
   return true;
+}
+
+// ── Секции плана настройки ────────────────────────────────────────────────────
+
+/** Статус секции business (foundation), не входящей в SETUP_PLAN. */
+export function computeFoundationSectionStatus(foundation?: BusinessFoundation): NodeStatus {
+  if (
+    isRealValue(foundation?.company_description) &&
+    !!foundation?.market_type &&
+    hasRealValue(foundation?.geography)
+  ) return "done";
+  return "current";
+}
+
+const SECTION_DEFS: Array<{ id: string; label: string; nodeIds: string[] }> = [
+  { id: "services",  label: "Услуга",    nodeIds: ["service"] },
+  { id: "pricing",   label: "Цена",      nodeIds: ["price"] },
+  { id: "scope",     label: "Состав",    nodeIds: ["includes", "excludes"] },
+  { id: "estimate",  label: "Расчёт",    nodeIds: ["estimate_inputs"] },
+  { id: "geography", label: "География", nodeIds: ["geography"] },
+  { id: "clients",   label: "Клиенты",   nodeIds: ["customer_segments"] },
+  { id: "avi",       label: "Avi",       nodeIds: ["avi_questions", "handoff_rules"] },
+  { id: "scout",     label: "Scout",     nodeIds: ["scout_signals", "scout_sources"] },
+];
+
+function aggregateSectionStatus(nodes: SetupPlanItem[]): NodeStatus {
+  const nonSkipped = nodes.filter((n) => n.status !== "skipped");
+  if (nonSkipped.length === 0) return "skipped";
+  if (nonSkipped.some((n) => n.status === "current")) return "current";
+  if (nonSkipped.some((n) => n.status === "upcoming")) return "upcoming";
+  return "done";
+}
+
+/**
+ * Группирует SetupPlanItem[] в секции для UI (раздел 7.1.2 ТЗ v9.1).
+ * Секции "business" и "launch" — виртуальные, не из plan:
+ *   • business — computeFoundationSectionStatus(opts.foundation)
+ *   • launch   — done если stage=daily_assistant; current если readyToLaunch; иначе upcoming
+ */
+export function groupPlanIntoSections(
+  plan: SetupPlanItem[],
+  opts?: { foundation?: BusinessFoundation; stage?: AssistantStage; readyToLaunch?: boolean },
+): SectionSummary[] {
+  const planById = new Map(plan.map((n) => [n.id, n]));
+  const sections: SectionSummary[] = [];
+
+  sections.push({
+    id: "business",
+    label: "Бизнес",
+    status: computeFoundationSectionStatus(opts?.foundation),
+    nodeIds: [],
+  });
+
+  for (const def of SECTION_DEFS) {
+    const nodes = def.nodeIds.map((id) => planById.get(id)).filter(Boolean) as SetupPlanItem[];
+    sections.push({ id: def.id, label: def.label, status: aggregateSectionStatus(nodes), nodeIds: def.nodeIds });
+  }
+
+  let launchStatus: NodeStatus;
+  if (opts?.stage === "daily_assistant") {
+    launchStatus = "done";
+  } else if (opts?.readyToLaunch) {
+    launchStatus = "current";
+  } else {
+    launchStatus = "upcoming";
+  }
+  sections.push({ id: "launch", label: "Запуск", status: launchStatus, nodeIds: [] });
+
+  return sections;
 }

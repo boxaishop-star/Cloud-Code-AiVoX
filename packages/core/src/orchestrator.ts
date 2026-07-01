@@ -1,6 +1,6 @@
 import { classifyIntentLocally } from "./intentEngine.js";
 import { validateProposedActions, sanitizeForResponse } from "./validation.js";
-import { computeNextStep, computeReadiness, checkProfileReadyForDailyAssistant, pickBestCard, resolveNichePack } from "./nextStepController.js";
+import { computeNextStep, computeReadiness, pickBestCard, resolveNichePack } from "./nextStepController.js";
 import { isRealValue, hasRealValue } from "./utils/placeholders.js";
 import type { DataStore } from "./store.js";
 import type { ExtractionProvider } from "./extraction/types.js";
@@ -161,26 +161,9 @@ export class BusinessAssistantOrchestrator {
       ? computeNextStep(updatedCard)
       : extraction.next_step ?? (bestFreshCard ? computeNextStep(bestFreshCard) : undefined);
 
-    // ── Проверка перехода A→B (раздел 7.1.1 ТЗ v9.0) ─────────────────────────
-    let finalStage: AssistantStage = currentStage;
-    let stageTransitionMessage: string | undefined;
-
-    const freshFoundation = await this.store.getFoundation(input.tenant_id);
-
-    if (currentStage === "profile_setup") {
-      if (checkProfileReadyForDailyAssistant(freshCards, freshFoundation)) {
-        await this.store.applyAction({
-          type: "upsert_business_foundation",
-          payload: { tenant_id: input.tenant_id, assistant_stage: "daily_assistant" },
-        });
-        finalStage = "daily_assistant";
-        stageTransitionMessage =
-          "Профиль заполнен — перехожу в режим Daily Assistant. " +
-          "Теперь помогу отслеживать активность, лиды и отвечать на вопросы о текущем состоянии бизнеса.";
-      }
-    }
-
     // ── Формирование ответа ────────────────────────────────────────────────────
+    const finalStage: AssistantStage = currentStage;
+    const freshFoundation = await this.store.getFoundation(input.tenant_id);
 
     // Свежее состояние foundation после применения акций.
     const freshFoundationComplete = isFoundationComplete(freshFoundation);
@@ -208,9 +191,7 @@ export class BusinessAssistantOrchestrator {
       baseResponse = this.renderResponse(extraction.intent, updatedCard, appliedActions, nextStep, extraction.clarification_text, currentStage, wasNewCard);
     }
 
-    const assistantResponse = stageTransitionMessage
-      ? `${stageTransitionMessage}\n\n${baseResponse}`
-      : baseResponse;
+    const assistantResponse = baseResponse;
 
     // Yellow block появляется ТОЛЬКО рядом с карточкой услуги — во всех остальных случаях
     // (clarification, foundation вопросы, no-card) вопрос уже встроен в текст ответа,

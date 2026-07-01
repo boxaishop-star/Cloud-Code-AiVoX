@@ -177,42 +177,39 @@ describe("Orchestrator: переход profile_setup → daily_assistant", () =>
     expect(result.assistantResponse).not.toContain("Daily Assistant");
   });
 
-  it("переходит в daily_assistant когда readiness >= 80 и foundation заполнен", async () => {
+  it("checkProfileReadyForDailyAssistant=true при readiness >= 80 и заполненном foundation; ручная активация переводит в daily_assistant", async () => {
     const store = new InMemoryStore();
 
-    // Предзагружаем карточку с реальными полями readiness >= 80 напрямую в store.
-    await store.applyAction({
-      type: "upsert_product_card",
-      payload: { ...READY_CARD },
-    });
-    // Предзагружаем foundation (без assistant_stage — он будет дефолтным "profile_setup").
     await store.applyAction({
       type: "upsert_business_foundation",
       payload: { ...FULL_FOUNDATION, tenant_id: "t_stage2" },
     });
-    // Дублируем карточку с правильным tenant_id.
     await store.applyAction({
       type: "upsert_product_card",
       payload: { ...READY_CARD, tenant_id: "t_stage2" },
     });
 
-    // Следующее сообщение не создаёт новых карточек — только тригерит проверку.
     const extractor = new MockExtractionProvider({
-      "готово": {
-        intent: "inquiry",
-        confidence: 0.5,
-        proposed_actions: [],
-      },
+      "готово": { intent: "inquiry", confidence: 0.5, proposed_actions: [] },
     });
     const orch = new BusinessAssistantOrchestrator(store, extractor);
     const result = await orch.process({ userMessage: "всё готово?", tenant_id: "t_stage2" });
 
-    expect(result.assistant_stage).toBe("daily_assistant");
-    expect(result.assistantResponse).toContain("Daily Assistant");
+    // Без авто-перехода: стадия остаётся profile_setup после process().
+    expect(result.assistant_stage).toBe("profile_setup");
 
-    // store теперь должен хранить daily_assistant.
-    const updatedFoundation = await store.getFoundation("t_stage2");
-    expect((updatedFoundation as any)?.assistant_stage).toBe("daily_assistant");
+    // checkProfileReadyForDailyAssistant должна вернуть true.
+    const cards = await store.getProductCards("t_stage2");
+    const foundation = await store.getFoundation("t_stage2");
+    expect(checkProfileReadyForDailyAssistant(cards, foundation ?? undefined)).toBe(true);
+
+    // Ручная активация через store.
+    await store.applyAction({
+      type: "upsert_business_foundation",
+      payload: { tenant_id: "t_stage2", assistant_stage: "daily_assistant" },
+    });
+    const updated = await store.getFoundation("t_stage2") as any;
+    expect(updated?.assistant_stage).toBe("daily_assistant");
   });
 
   it("остаётся в daily_assistant при последующих сообщениях", async () => {

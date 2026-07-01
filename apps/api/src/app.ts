@@ -9,7 +9,12 @@ import {
   computeReadiness,
   pickBestCard,
   resolveNichePack,
+  checkProfileReadyForDailyAssistant,
+  groupPlanIntoSections,
+  isRealValue,
+  hasRealValue,
   type AdminDataStore,
+  type AssistantStage,
 } from '@aivox/core';
 
 export const app = express();
@@ -143,7 +148,58 @@ app.get('/api/setup-plan', async (req, res) => {
     const foundation = await store.getFoundation(tenantId);
     const pack = resolveNichePack(bestCard, foundation ?? undefined);
     const { readiness_score, missing_fields, plan } = computeReadiness(bestCard, pack);
-    res.json({ plan, readiness_score, missing_fields, bestCard: { id: bestCard.id, name: bestCard.name, service_line: bestCard.service_line } });
+    const readyToLaunch = checkProfileReadyForDailyAssistant(cards, foundation ?? undefined);
+    const sections = groupPlanIntoSections(plan, {
+      foundation: foundation ?? undefined,
+      stage: ((foundation as any)?.assistant_stage ?? 'profile_setup') as AssistantStage,
+      readyToLaunch,
+    });
+    res.json({ plan, readiness_score, missing_fields, bestCard: { id: bestCard.id, name: bestCard.name, service_line: bestCard.service_line }, sections, readyToLaunch });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+// Раздел 7.1.2 ТЗ v9.1: ручная активация daily_assistant — переход A→B только по явному запросу.
+app.post('/api/activate-daily-assistant', async (req, res) => {
+  const { userId } = getAuth(req);
+  if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+  const { tenant_id } = req.body as { tenant_id?: string };
+  if (!tenant_id) { res.status(400).json({ error: 'tenant_id is required' }); return; }
+
+  try {
+    const store = new PostgresStore(getPrismaClient());
+    const [cards, foundation] = await Promise.all([
+      store.getProductCards(tenant_id),
+      store.getFoundation(tenant_id),
+    ]);
+
+    if (!checkProfileReadyForDailyAssistant(cards, foundation ?? undefined)) {
+      const reasons: string[] = [];
+      if (cards.length === 0) {
+        reasons.push('нет ни одной карточки услуги');
+      } else {
+        const best = cards.reduce((a, b) =>
+          computeReadiness(a).readiness_score >= computeReadiness(b).readiness_score ? a : b
+        );
+        const { readiness_score } = computeReadiness(best);
+        if (readiness_score < 80) reasons.push(`readiness_score = ${readiness_score} (нужно ≥ 80)`);
+        if (best.scout_search_signals.length === 0) reasons.push('не заполнены scout_search_signals');
+      }
+      if (!isRealValue(foundation?.company_description)) reasons.push('не заполнен company_description');
+      if (!foundation?.market_type) reasons.push('не указан market_type');
+      if (!hasRealValue(foundation?.geography)) reasons.push('не заполнена geography');
+      res.status(400).json({ error: 'Профиль не готов к запуску', reasons });
+      return;
+    }
+
+    await store.applyAction({
+      type: 'upsert_business_foundation',
+      payload: { tenant_id, assistant_stage: 'daily_assistant' },
+    });
+    res.json({ success: true, assistant_stage: 'daily_assistant' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });

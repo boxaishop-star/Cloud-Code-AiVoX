@@ -14,7 +14,11 @@ import { describe, it, expect } from "vitest";
 import { BusinessAssistantOrchestrator } from "../../src/orchestrator.js";
 import { InMemoryStore } from "../../src/toolLayer.js";
 import { MockExtractionProvider } from "../../src/extraction/mockProvider.js";
-import { computeReadiness } from "../../src/nextStepController.js";
+import {
+  computeReadiness,
+  checkProfileReadyForDailyAssistant,
+  groupPlanIntoSections,
+} from "../../src/nextStepController.js";
 import type { ExtractionResult } from "../../src/extraction/types.js";
 
 const TENANT = "nail_ext_golden";
@@ -270,9 +274,9 @@ describe("Golden: SETUP_PLAN NodeStatus (раздел 7.1.2 ТЗ v9.1)", () => {
   });
 });
 
-// ── Финальная карточка и переход A→B ─────────────────────────────────────────
+// ── Финальная карточка и ручная активация ────────────────────────────────────
 
-describe("Golden: финальная карточка и переход daily_assistant", () => {
+describe("Golden: финальная карточка и ручная активация daily_assistant", () => {
   async function buildFull(store: InMemoryStore, orch: BusinessAssistantOrchestrator) {
     await runHods(orch,
       MSG.h1, MSG.h2, MSG.h3, MSG.h4,
@@ -295,12 +299,22 @@ describe("Golden: финальная карточка и переход daily_as
     expect(readiness_score).toBeGreaterThan(80);
   });
 
-  it("Ход 10: handoff_rules → переход в daily_assistant", async () => {
+  it("Ход 10: handoff_rules → стадия profile_setup, checkProfileReadyForDailyAssistant=true, ручная активация срабатывает", async () => {
     const { store, orch } = makeOrch();
     await buildFull(store, orch);
     const result = await orch.process({ userMessage: MSG.h10, tenant_id: TENANT });
-    expect(result.assistant_stage).toBe("daily_assistant");
-    const [card] = await store.getProductCards(TENANT);
+    // Без авто-перехода orch возвращает profile_setup
+    expect(result.assistant_stage).toBe("profile_setup");
+    // Но профиль готов — checkProfileReadyForDailyAssistant=true
+    const cards = await store.getProductCards(TENANT);
+    const foundation = await store.getFoundation(TENANT);
+    expect(checkProfileReadyForDailyAssistant(cards, foundation ?? undefined)).toBe(true);
+    // Ручная активация
+    await store.applyAction({ type: "upsert_business_foundation", payload: { tenant_id: TENANT, assistant_stage: "daily_assistant" } });
+    const updated = await store.getFoundation(TENANT) as any;
+    expect(updated?.assistant_stage).toBe("daily_assistant");
+    // Карточка с handoff_rules записана
+    const [card] = cards;
     expect(card.handoff_to_human_rules).toContain("жалоба клиента");
   });
 
@@ -312,5 +326,48 @@ describe("Golden: финальная карточка и переход daily_as
     const { readiness_score, plan } = computeReadiness(card);
     expect(readiness_score).toBe(100);
     expect(plan.filter(n => n.status === "current" || n.status === "upcoming")).toHaveLength(0);
+  });
+});
+
+// ── groupPlanIntoSections ─────────────────────────────────────────────────────
+
+describe("Golden: groupPlanIntoSections (раздел 7.1.2 ТЗ v9.1)", () => {
+  async function buildAll10(store: InMemoryStore, orch: BusinessAssistantOrchestrator) {
+    await runHods(orch,
+      MSG.h1, MSG.h2, MSG.h3, MSG.h4,
+      MSG.h5, MSG.h6, MSG.h7, MSG.h8, MSG.h9, MSG.h10,
+    );
+  }
+
+  it("секция avi не дублируется и содержит оба nodeId", async () => {
+    const { store, orch } = makeOrch();
+    await buildAll10(store, orch);
+    const [card] = await store.getProductCards(TENANT);
+    const { plan } = computeReadiness(card);
+    const sections = groupPlanIntoSections(plan);
+    const aviSections = sections.filter((s) => s.id === "avi");
+    expect(aviSections).toHaveLength(1);
+    expect(aviSections[0].nodeIds).toContain("avi_questions");
+    expect(aviSections[0].nodeIds).toContain("handoff_rules");
+  });
+
+  it("launch=upcoming когда readyToLaunch=false", async () => {
+    const { store, orch } = makeOrch();
+    await runHods(orch, MSG.h1, MSG.h2, MSG.h3);
+    const [card] = await store.getProductCards(TENANT);
+    const { plan } = computeReadiness(card);
+    const sections = groupPlanIntoSections(plan, { readyToLaunch: false, stage: "profile_setup" });
+    expect(sections.find((s) => s.id === "launch")!.status).toBe("upcoming");
+  });
+
+  it("launch=current когда readyToLaunch=true и stage=profile_setup", async () => {
+    const { store, orch } = makeOrch();
+    await buildAll10(store, orch);
+    const cards = await store.getProductCards(TENANT);
+    const foundation = await store.getFoundation(TENANT);
+    const { plan } = computeReadiness(cards[0]);
+    const ready = checkProfileReadyForDailyAssistant(cards, foundation ?? undefined);
+    const sections = groupPlanIntoSections(plan, { readyToLaunch: ready, stage: "profile_setup" });
+    expect(sections.find((s) => s.id === "launch")!.status).toBe("current");
   });
 });
