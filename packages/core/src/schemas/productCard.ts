@@ -30,6 +30,7 @@ export const ProductCardSchema = z.object({
   evidence: z.array(z.record(z.string(), z.unknown())).default([]),
   source: z.string().default("business_assistant"),
   created_from_conversation: z.boolean().default(true),
+  updated_at: z.string().datetime().optional(),
 });
 
 export type ProductCard = z.infer<typeof ProductCardSchema>;

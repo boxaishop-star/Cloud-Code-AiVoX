@@ -19,3 +19,4 @@ export * from "./db/postgresStore.js";
 export * from "./auth/roles.js";
 export * from "./auth/requireRole.js";
 export * from "./avi/draftProvider.js";
+export * from "./avi/conversationEngine.js";
