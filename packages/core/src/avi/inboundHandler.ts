@@ -19,6 +19,8 @@ export interface AviInboundRequest {
 export interface AviInboundResult {
   conversationId: string;
   relationshipCardId: string;
+  /** true = диалог ведёт человек, клиенту ничего отправлять не нужно */
+  awaitingHuman: boolean;
   response: AviResponse;
 }
 
@@ -70,13 +72,33 @@ export async function handleAviInboundMessage(
     relationshipCardId = conversation.relationship_card_id!;
   }
 
-  // 2. Load history and call engine
+  // 2. Guard: если диалог уже передан человеку — сохранить сообщение, но не звать Avi.
+  // Раздел 4 ТЗ v9.1: Avi не должен отвечать автоматически после handoff.
+  if (conversation.status === 'needs_human') {
+    await store.saveMessage({
+      id: randomUUID(),
+      conversation_id: conversation.id,
+      tenant_id: tenantId,
+      role: 'client',
+      text,
+      logged_facts: [],
+      created_at: now,
+    });
+    return {
+      conversationId: conversation.id,
+      relationshipCardId,
+      awaitingHuman: true,
+      response: { message: '', handoffTriggered: true, loggedFacts: [], clientFacts: [] },
+    };
+  }
+
+  // 3. Load history and call engine
   const messages = await store.getMessages(conversation.id);
   const history = messages.map((m) => ({ role: m.role, text: m.text }));
 
   const aviResponse = await engine.respond(text, history, productCard, foundation);
 
-  // 3. Save client message
+  // 4. Save client message — logged_facts всегда пустые (факты приписываются только сообщению Avi)
   await store.saveMessage({
     id: randomUUID(),
     conversation_id: conversation.id,
@@ -87,7 +109,7 @@ export async function handleAviInboundMessage(
     created_at: now,
   });
 
-  // 4. Save Avi message (logged_facts = SERVICE facts only)
+  // 5. Save Avi message (logged_facts = SERVICE facts only)
   await store.saveMessage({
     id: randomUUID(),
     conversation_id: conversation.id,
@@ -98,7 +120,7 @@ export async function handleAviInboundMessage(
     created_at: now,
   });
 
-  // 5. Apply clientFacts → RelationshipCard
+  // 6. Apply clientFacts → RelationshipCard
   if (aviResponse.clientFacts.length > 0) {
     const patch: Record<string, unknown> = {};
     for (const fact of aviResponse.clientFacts) {
@@ -110,14 +132,14 @@ export async function handleAviInboundMessage(
     await store.updateRelationshipCard(tenantId, relationshipCardId, patch);
   }
 
-  // 6. Apply funnelSignal → RelationshipCard.status
+  // 7. Apply funnelSignal → RelationshipCard.status
   if (aviResponse.funnelSignal) {
     await store.updateRelationshipCard(tenantId, relationshipCardId, {
       status: aviResponse.funnelSignal,
     });
   }
 
-  // 7. Handle handoff → conversation.status = needs_human
+  // 8. Handle handoff → conversation.status = needs_human
   if (aviResponse.handoffTriggered) {
     const updated: Conversation = { ...conversation, status: 'needs_human', updated_at: now };
     await store.saveConversation(updated);
@@ -126,6 +148,7 @@ export async function handleAviInboundMessage(
   return {
     conversationId: conversation.id,
     relationshipCardId,
+    awaitingHuman: false,
     response: aviResponse,
   };
 }

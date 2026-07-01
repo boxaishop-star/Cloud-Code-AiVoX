@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { InMemoryStore } from '../../src/toolLayer.js';
 import { MockAviConversationEngine } from '../../src/avi/conversationEngine.js';
+import type { AviConversationEngine, AviResponse } from '../../src/avi/conversationEngine.js';
 import { handleAviInboundMessage } from '../../src/avi/inboundHandler.js';
 import type { ProductCard } from '../../src/schemas/productCard.js';
 import type { BusinessFoundation } from '../../src/schemas/businessFoundation.js';
@@ -208,5 +209,92 @@ describe('avi/inboundHandler — golden tests', () => {
 
     const rcs = await store.getRelationshipCards(TENANT);
     expect(rcs).toHaveLength(1);
+  });
+
+  // ── Раздел 4 ТЗ v9.1: Avi не отвечает после handoff ─────────────────────────
+
+  it('после handoff: awaitingHuman=true, engine.respond() не вызывается', async () => {
+    // Шаг А: сообщение триггерит handoff
+    const handoffEngine = new MockAviConversationEngine({
+      'встретиться': {
+        message: 'Передаю ваш вопрос — совсем скоро ответят',
+        handoffTriggered: true,
+        handoffReason: 'клиент хочет встретиться с прорабом',
+        clientFacts: [],
+      },
+    });
+    await handleAviInboundMessage(makeRequest('хочу встретиться с прорабом'), store, handoffEngine);
+
+    const conv = await store.findConversation(TENANT, 'telegram', 'tg-chat-1');
+    expect(conv?.status).toBe('needs_human');
+
+    // Шаг Б: engine, который бросает исключение если его позвали
+    class ErrorIfCalledEngine implements AviConversationEngine {
+      async respond(): Promise<AviResponse> {
+        throw new Error('engine.respond() was called — must NOT happen after handoff (раздел 4 ТЗ)');
+      }
+    }
+
+    const result = await handleAviInboundMessage(makeRequest('ещё одно сообщение'), store, new ErrorIfCalledEngine());
+
+    expect(result.awaitingHuman).toBe(true);
+    expect(result.response.message).toBe('');
+    expect(result.response.handoffTriggered).toBe(true);
+  });
+
+  it('после handoff: сообщение клиента сохраняется в истории несмотря на отсутствие ответа', async () => {
+    const handoffEngine = new MockAviConversationEngine({
+      'встретиться': {
+        message: 'Передаю ваш вопрос — совсем скоро ответят',
+        handoffTriggered: true,
+        clientFacts: [],
+      },
+    });
+    const r1 = await handleAviInboundMessage(makeRequest('хочу встретиться'), store, handoffEngine);
+
+    class SilentEngine implements AviConversationEngine {
+      async respond(): Promise<AviResponse> {
+        throw new Error('должен быть заглушён');
+      }
+    }
+
+    const r2 = await handleAviInboundMessage(makeRequest('когда перезвонит мастер?'), store, new SilentEngine());
+
+    const messages = await store.getMessages(r2.conversationId);
+    // client(1) + avi(1) + client(2) = 3  (Avi-ответа нет, только client-сообщение)
+    expect(messages).toHaveLength(3);
+    const last = messages[messages.length - 1];
+    expect(last.role).toBe('client');
+    expect(last.text).toBe('когда перезвонит мастер?');
+  });
+
+  it('awaitingHuman=false в нормальном (не-handoff) ответе', async () => {
+    const engine = new MockAviConversationEngine({
+      'стоит': { message: 'Цена 8000 руб/м³.', clientFacts: [] },
+    });
+
+    const result = await handleAviInboundMessage(makeRequest('сколько стоит?'), store, engine);
+
+    expect(result.awaitingHuman).toBe(false);
+  });
+
+  it('клиентские сообщения всегда сохраняются с logged_facts=[] (факты только в Avi-сообщении)', async () => {
+    const engine = new MockAviConversationEngine({
+      'арматура': {
+        message: 'Включает арматуру и бетон М300.',
+        loggedFacts: [{ field: 'includes', value: 'арматура' }],
+        clientFacts: [],
+      },
+    });
+
+    const result = await handleAviInboundMessage(makeRequest('что включает арматура'), store, engine);
+
+    const messages = await store.getMessages(result.conversationId);
+    const clientMsg = messages.find((m) => m.role === 'client');
+    const aviMsg    = messages.find((m) => m.role === 'avi');
+
+    expect(clientMsg?.logged_facts).toEqual([]);
+    expect(aviMsg?.logged_facts).toHaveLength(1);
+    expect((aviMsg?.logged_facts as Array<{field: string}>)[0].field).toBe('includes');
   });
 });
