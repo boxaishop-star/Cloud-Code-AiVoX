@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "chat": "tsx scripts/chat.ts",
+    "avi:test": "tsx scripts/dev/avi-manual-test.ts",
     "db:up": "docker compose up -d",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate"
