@@ -7,6 +7,15 @@ import type { ScoutJob } from "./schemas/scoutJob.js";
 import { ScoutJobSchema, ScoutChannelSchema } from "./schemas/scoutJob.js";
 import type { DataStore, AdminDataStore } from "./store.js";
 
+// Список array-полей ProductCard, защищённых от тихой перезаписи пустым массивом при update.
+// Явная очистка поля должна быть отдельным явным флагом, не побочным эффектом пустого массива.
+const PROTECTED_ARRAY_FIELDS = [
+  'includes', 'excludes', 'estimate_inputs', 'customer_segments',
+  'geography', 'scout_search_signals', 'scout_sources',
+  'avi_qualification_questions', 'handoff_to_human_rules',
+  'price_rules', 'variants',
+] as const;
+
 // Раздел 9 ТЗ (мультитенантность): хранилище партиционировано по tenant_id на уровне
 // структуры данных, а не "не забыли добавить WHERE" — на Этапе 1 та же гарантия
 // обеспечивается слоем доступа к Postgres с автоматическим фильтром по tenant_id.
@@ -70,7 +79,18 @@ export class InMemoryStore implements AdminDataStore {
               error: `ProductCard not found for service_line '${serviceLine}' — use upsert_product_card to create it first`,
             });
           }
-          const merged = { ...list[idx], ...action.payload };
+          // Защита от потери данных: пустой массив в payload не перезаписывает уже
+          // собранные данные в существующей карточке. Явная очистка — отдельный флаг.
+          const safePayload = { ...action.payload } as Record<string, unknown>;
+          for (const field of PROTECTED_ARRAY_FIELDS) {
+            const incoming = safePayload[field];
+            const existing = (list[idx] as Record<string, unknown>)[field];
+            if (Array.isArray(incoming) && incoming.length === 0 &&
+                Array.isArray(existing) && existing.length > 0) {
+              delete safePayload[field];
+            }
+          }
+          const merged = { ...list[idx], ...safePayload };
           const normalized = ProductCardSchema.parse(merged) as ProductCard;
           list[idx] = normalized;
           this.productCards.set(tenantId, list);

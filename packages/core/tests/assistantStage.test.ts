@@ -385,3 +385,189 @@ describe("Foundation Gate: Orchestrator projected check", () => {
     expect(cards).toHaveLength(1);
   });
 });
+
+// ── Фаза 1: защита update_product_card от потери данных (раздел 7.1.2 ТЗ v9.1) ──
+
+describe("update_product_card: защита от потери данных при коррекции", () => {
+  const BASE_PAYLOAD = {
+    id: "nail_ext",
+    name: "Наращивание ногтей",
+    category: "Красота и уход",
+    service_line: "nail_ext",
+    pricing_model: "fixed" as const,
+    price: 2500,
+    includes: ["снятие покрытия", "опил формы", "стерилизация инструментов"],
+  };
+
+  it("пустой includes в update не стирает существующий includes", async () => {
+    const store = new InMemoryStore();
+    await store.applyAction({ type: "upsert_product_card", payload: { ...BASE_PAYLOAD, tenant_id: "t_upd" } });
+
+    await store.applyAction({
+      type: "update_product_card",
+      payload: { tenant_id: "t_upd", service_line: "nail_ext", includes: [] },
+    });
+
+    const [card] = await store.getProductCards("t_upd");
+    expect(card.includes).toEqual(["снятие покрытия", "опил формы", "стерилизация инструментов"]);
+  });
+
+  it("непустой includes в update корректно заменяет существующий", async () => {
+    const store = new InMemoryStore();
+    await store.applyAction({ type: "upsert_product_card", payload: { ...BASE_PAYLOAD, tenant_id: "t_upd2" } });
+
+    await store.applyAction({
+      type: "update_product_card",
+      payload: { tenant_id: "t_upd2", service_line: "nail_ext", includes: ["новый состав"] },
+    });
+
+    const [card] = await store.getProductCards("t_upd2");
+    expect(card.includes).toEqual(["новый состав"]);
+  });
+
+  it("пустые arrays в нескольких полях одновременно — все сохраняются", async () => {
+    const store = new InMemoryStore();
+    await store.applyAction({
+      type: "upsert_product_card",
+      payload: {
+        ...BASE_PAYLOAD,
+        tenant_id: "t_upd3",
+        excludes: ["дизайн со стразами"],
+        scout_search_signals: ["наращивание ногтей москва"],
+      },
+    });
+
+    await store.applyAction({
+      type: "update_product_card",
+      payload: {
+        tenant_id: "t_upd3",
+        service_line: "nail_ext",
+        includes: [],
+        excludes: [],
+        scout_search_signals: [],
+        price: 3000,
+      },
+    });
+
+    const [card] = await store.getProductCards("t_upd3");
+    expect(card.includes).toEqual(["снятие покрытия", "опил формы", "стерилизация инструментов"]);
+    expect(card.excludes).toEqual(["дизайн со стразами"]);
+    expect(card.scout_search_signals).toEqual(["наращивание ногтей москва"]);
+    expect(card.price).toBe(3000); // скалярное поле обновляется нормально
+  });
+});
+
+describe("Gate 2b: update_product_card с другим name/category → disambiguationNeeded", () => {
+  const EXISTING_NAIL = {
+    id: "nail_ext",
+    tenant_id: "t",
+    name: "Наращивание ногтей",
+    category: "Красота и уход",
+    service_line: "nail_ext",
+    pricing_model: "fixed" as const,
+    price: 2500,
+    currency: "RUB",
+    includes: [],
+    excludes: [],
+    estimate_inputs: [],
+    customer_segments: [],
+    geography: [],
+    scout_search_signals: [],
+    scout_sources: [],
+    avi_qualification_questions: [],
+    handoff_to_human_rules: [],
+    price_rules: [],
+    variants: [],
+    readiness_score: 50,
+    missing_fields: [],
+    evidence: [],
+    source: "business_assistant" as const,
+    created_from_conversation: true,
+  };
+
+  it("смена name на принципиально другое → disambiguationNeeded=true, карточка не обновлена", () => {
+    const { validActions, errors, disambiguationNeeded } = validateProposedActions(
+      [{ type: "update_product_card", payload: { tenant_id: "t", service_line: "nail_ext", name: "Педикюр" } }],
+      [EXISTING_NAIL],
+      [],
+    );
+    expect(disambiguationNeeded).toBe(true);
+    expect(validActions).toHaveLength(0);
+    expect(errors[0]).toContain("существенно отличается");
+  });
+
+  it("смена category на другую → disambiguationNeeded=true", () => {
+    const { validActions, disambiguationNeeded } = validateProposedActions(
+      [{ type: "update_product_card", payload: { tenant_id: "t", service_line: "nail_ext", category: "Строительство" } }],
+      [EXISTING_NAIL],
+      [],
+    );
+    expect(disambiguationNeeded).toBe(true);
+    expect(validActions).toHaveLength(0);
+  });
+
+  it("уточнение name (подстрока) → OK, не disambiguation", () => {
+    const { validActions, disambiguationNeeded } = validateProposedActions(
+      [{ type: "update_product_card", payload: { tenant_id: "t", service_line: "nail_ext", name: "Наращивание ногтей гелем" } }],
+      [EXISTING_NAIL],
+      [],
+    );
+    expect(disambiguationNeeded).toBe(false);
+    expect(validActions).toHaveLength(1);
+  });
+
+  it("update без name/category → OK, не disambiguation", () => {
+    const { validActions, disambiguationNeeded } = validateProposedActions(
+      [{ type: "update_product_card", payload: { tenant_id: "t", service_line: "nail_ext", price: 3000 } }],
+      [EXISTING_NAIL],
+      [],
+    );
+    expect(disambiguationNeeded).toBe(false);
+    expect(validActions).toHaveLength(1);
+  });
+});
+
+describe("Фаза 1: сценарий ответ-на-вопрос → коррекция услуги (раздел 7.1.2 ТЗ v9.1)", () => {
+  it("includes сохраняются после попытки сменить услугу через update", async () => {
+    const store = new InMemoryStore();
+
+    // Шаг 1: создаём карточку «Наращивание ногтей»
+    await store.applyAction({
+      type: "upsert_business_foundation",
+      payload: { tenant_id: "t_s1", company_description: "Мастер ногтей", market_type: "B2C", geography: ["Москва"] },
+    });
+    await store.applyAction({
+      type: "upsert_product_card",
+      payload: { id: "nail_ext", name: "Наращивание ногтей", category: "Красота и уход", service_line: "nail_ext", pricing_model: "fixed", price: 2500, tenant_id: "t_s1" },
+    });
+
+    // Шаг 2: пользователь отвечает «что входит» → includes заполняются
+    await store.applyAction({
+      type: "update_product_card",
+      payload: { tenant_id: "t_s1", service_line: "nail_ext", includes: ["снятие покрытия", "опил формы"] },
+    });
+
+    // Шаг 3: модель пытается переписать на «Педикюр» через update с пустым includes
+    // Gate 2b должен заблокировать смену name; пустой includes не стирает данные
+    const extractor = new MockExtractionProvider({
+      "педикюр": {
+        intent: "business_setup",
+        confidence: 0.9,
+        proposed_actions: [{
+          type: "update_product_card",
+          payload: { service_line: "nail_ext", name: "Педикюр", category: "Педикюр", includes: [] },
+        }],
+      },
+    });
+    const orch = new BusinessAssistantOrchestrator(store, extractor);
+    const result = await orch.process({ userMessage: "педикюр", tenant_id: "t_s1" });
+
+    // (а) includes не исчезли
+    const [card] = await store.getProductCards("t_s1");
+    expect(card.includes).toEqual(["снятие покрытия", "опил формы"]);
+
+    // (б) name не превратилось в «Педикюр» без явного вопроса-уточнения
+    expect(card.name).toBe("Наращивание ногтей");
+    expect(result.rejectedActions.some(e => e.includes("существенно отличается"))).toBe(true);
+  });
+});

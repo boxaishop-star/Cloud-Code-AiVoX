@@ -4,8 +4,19 @@ import type { ProductCard } from "./schemas/productCard.js";
 export interface ValidationResult {
   validActions: ToolAction[];
   errors: string[];
-  /** True when a upsert_product_card was rejected solely because it targeted a different service_line than activeServiceLine. */
+  /** True when a card action was rejected because it would silently change the active service identity. */
   disambiguationNeeded: boolean;
+}
+
+/**
+ * Эвристика «уточнение vs другая услуга»: строки считаются связанными,
+ * если одна является подстрокой другой (без учёта регистра и пробелов).
+ * Пример: "Маникюр гель" / "Маникюр" — связаны; "Педикюр" / "Маникюр" — нет.
+ */
+function isSubstringRelated(a: string, b: string): boolean {
+  const al = a.toLowerCase().trim();
+  const bl = b.toLowerCase().trim();
+  return al.includes(bl) || bl.includes(al);
 }
 
 // Слова-маркеры buyer_type, которые НЕ должны встречаться в поле segment, и наоборот —
@@ -46,7 +57,7 @@ export function validateProposedActions(
         continue;
       }
 
-      // Gate 2: Service line focus — only the active card can be updated while it is in progress.
+      // Gate 2a: Service line focus — upsert_product_card для другого service_line требует уточнения.
       const incomingServiceLine = (action.payload as Record<string, unknown>).service_line as string | undefined;
       if (
         opts?.activeServiceLine &&
@@ -61,6 +72,34 @@ export function validateProposedActions(
         );
         continue;
       }
+
+      // Gate 2b: update_product_card — смена name или category на существенно другую означает
+      // не уточнение, а другую услугу. Эвристика: разная категория ИЛИ name не подстрока/надстрока.
+      if (action.type === "update_product_card") {
+        const payload = action.payload as Record<string, unknown>;
+        const incomingName = payload.name as string | undefined;
+        const incomingCategory = payload.category as string | undefined;
+        const existingCard = existingProductCards.find(
+          (c) => c.service_line === (payload.service_line as string),
+        );
+        if (existingCard) {
+          const nameConflict = incomingName && !isSubstringRelated(incomingName, existingCard.name);
+          const categoryConflict = incomingCategory && existingCard.category &&
+            incomingCategory.toLowerCase().trim() !== existingCard.category.toLowerCase().trim();
+          if (nameConflict || categoryConflict) {
+            disambiguationNeeded = true;
+            errors.push(
+              `Отклонено update_product_card: ` +
+              (nameConflict ? `name="${incomingName}" ` : '') +
+              (categoryConflict ? `category="${incomingCategory}" ` : '') +
+              `существенно отличается от текущей услуги "${existingCard.name}" — ` +
+              `это правка текущей услуги или новая услуга? (раздел 7.1.2 ТЗ v9.1)`,
+            );
+            continue;
+          }
+        }
+      }
+
       const { name, category, service_line, price } = action.payload as Record<string, unknown>;
 
       // Правило раздела 8.1, 2.2 ТЗ: категория не может быть услугой.
