@@ -17,11 +17,26 @@ interface SectionSummary {
   nodeIds: string[];
 }
 
+interface CatalogCardSummary {
+  id: string;
+  name: string;
+  service_line: string;
+  readiness_score: number;
+  status: 'done' | 'current' | 'upcoming';
+}
+
+interface CatalogSummary {
+  total: number;
+  done: number;
+  cards: CatalogCardSummary[];
+}
+
 interface SetupPlanData {
   readiness_score: number;
   readyToLaunch: boolean;
   sections: SectionSummary[];
   plan: PlanItem[];
+  catalog?: CatalogSummary;
 }
 
 // ── Status icon ───────────────────────────────────────────────────────────────
@@ -54,6 +69,12 @@ function StatusDot({ status }: { status: NodeStatus }) {
   );
 }
 
+// Мини-статус карточки каталога — просто цветной кружок (раздел 6, 7.1.2, 25 ТЗ v9.1).
+function CatalogCardDot({ status }: { status: CatalogCardSummary['status'] }) {
+  const color = status === 'done' ? 'bg-green-500' : status === 'current' ? 'bg-amber-500' : 'bg-[#E5E5E3]';
+  return <span className={`w-[7px] h-[7px] rounded-full shrink-0 ${color}`} />;
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SetupPlanPanel({ refreshKey }: { refreshKey?: number }) {
@@ -63,6 +84,7 @@ export default function SetupPlanPanel({ refreshKey }: { refreshKey?: number }) 
   const [data, setData] = useState<SetupPlanData | null>(null);
   const [fetching, setFetching] = useState(false);
   const [activating, setActivating] = useState(false);
+  const [catalogExpanded, setCatalogExpanded] = useState(false);
 
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
@@ -129,6 +151,60 @@ export default function SetupPlanPanel({ refreshKey }: { refreshKey?: number }) 
     const isCurrent = s.status === 'current';
     const isSkipped = s.status === 'skipped';
     const isDone = s.status === 'done';
+    const catalog = s.id === 'services' ? data?.catalog : undefined;
+
+    const labelBlock = (
+      <span
+        className={[
+          'flex-1 leading-tight',
+          isDone ? 'text-[#374151] font-medium' : '',
+          isCurrent ? 'text-amber-700 font-semibold' : '',
+          isSkipped ? 'text-gray-300 line-through' : '',
+          s.status === 'upcoming' ? 'text-gray-400' : '',
+        ].join(' ')}
+      >
+        {s.label}
+        {catalog && catalog.total > 0 && (
+          <span className="block text-[11px] font-normal text-[#A3A3A3]">
+            {catalog.done} из {catalog.total} настроено
+          </span>
+        )}
+      </span>
+    );
+
+    if (catalog && catalog.total > 0) {
+      return (
+        <div ref={(el) => { sectionRefs.current[s.id] = el; }}>
+          <button
+            type="button"
+            title={sectionTooltip(s)}
+            onClick={() => setCatalogExpanded((v) => !v)}
+            className={[
+              'w-full flex items-center gap-2.5 px-3 py-[7px] rounded-xl text-[13px] text-left transition-colors',
+              isCurrent ? 'bg-amber-50 border border-amber-200' : 'hover:bg-black/[0.025]',
+            ].join(' ')}
+          >
+            <StatusDot status={s.status} />
+            {labelBlock}
+            <span className={`text-[10px] text-[#A3A3A3] transition-transform shrink-0 ${catalogExpanded ? 'rotate-180' : ''}`}>
+              ▾
+            </span>
+          </button>
+          {catalogExpanded && (
+            <div className="pl-8 pr-3 py-1 flex flex-col gap-1.5">
+              {catalog.cards.map((c) => (
+                <div key={c.id} className="flex items-center gap-2">
+                  <CatalogCardDot status={c.status} />
+                  <span className={`text-[12px] leading-tight truncate ${c.status === 'upcoming' ? 'text-gray-400' : 'text-[#374151]'}`}>
+                    {c.name}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
 
     return (
       <div
@@ -140,17 +216,7 @@ export default function SetupPlanPanel({ refreshKey }: { refreshKey?: number }) 
         ].join(' ')}
       >
         <StatusDot status={s.status} />
-        <span
-          className={[
-            'flex-1 leading-tight',
-            isDone ? 'text-[#374151] font-medium' : '',
-            isCurrent ? 'text-amber-700 font-semibold' : '',
-            isSkipped ? 'text-gray-300 line-through' : '',
-            s.status === 'upcoming' ? 'text-gray-400' : '',
-          ].join(' ')}
-        >
-          {s.label}
-        </span>
+        {labelBlock}
       </div>
     );
   }

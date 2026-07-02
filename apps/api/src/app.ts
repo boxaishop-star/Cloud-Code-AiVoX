@@ -8,9 +8,12 @@ import {
   getRoleFromClerkUser,
   computeReadiness,
   pickBestCard,
+  pickNextCardInQueue,
   resolveNichePack,
   checkProfileReadyForDailyAssistant,
   groupPlanIntoSections,
+  computeCatalogSummary,
+  NICHE_SERVICE_CATALOGS,
   isRealValue,
   hasRealValue,
   type AdminDataStore,
@@ -141,20 +144,24 @@ app.get('/api/setup-plan', async (req, res) => {
     const store = new PostgresStore(getPrismaClient());
     const cards = await store.getProductCards(tenantId);
     if (cards.length === 0) {
-      res.json({ plan: [], bestCard: null });
+      res.json({ plan: [], bestCard: null, catalog: { total: 0, done: 0, cards: [] } });
       return;
     }
-    const bestCard = pickBestCard(cards)!;
+    const bestExisting = pickBestCard(cards)!;
     const foundation = await store.getFoundation(tenantId);
-    const pack = resolveNichePack(bestCard, foundation ?? undefined);
-    const { readiness_score, missing_fields, plan } = computeReadiness(bestCard, pack);
+    const pack = resolveNichePack(bestExisting, foundation ?? undefined);
+    // Активная карточка очереди — та же логика выбора, что и в оркестраторе (раздел 25 ТЗ v9.1).
+    const catalogDef = NICHE_SERVICE_CATALOGS[pack.id];
+    const activeCard = catalogDef ? (pickNextCardInQueue(cards, catalogDef) ?? bestExisting) : bestExisting;
+    const { readiness_score, missing_fields, plan } = computeReadiness(activeCard, pack);
     const readyToLaunch = checkProfileReadyForDailyAssistant(cards, foundation ?? undefined);
     const sections = groupPlanIntoSections(plan, {
       foundation: foundation ?? undefined,
       stage: ((foundation as any)?.assistant_stage ?? 'profile_setup') as AssistantStage,
       readyToLaunch,
     });
-    res.json({ plan, readiness_score, missing_fields, bestCard: { id: bestCard.id, name: bestCard.name, service_line: bestCard.service_line }, sections, readyToLaunch });
+    const catalog = computeCatalogSummary(cards, pack, activeCard);
+    res.json({ plan, readiness_score, missing_fields, bestCard: { id: activeCard.id, name: activeCard.name, service_line: activeCard.service_line }, sections, readyToLaunch, catalog });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });

@@ -332,6 +332,48 @@ export function pickNextCardInQueue(
   return pickBestCard(nonCatalog);
 }
 
+/** Мини-статус карточки каталога для правой панели (раздел 6, 7.1.2, 25 ТЗ v9.1). */
+export interface CatalogCardSummary {
+  id: string;
+  name: string;
+  service_line: string;
+  readiness_score: number;
+  status: "done" | "current" | "upcoming";
+}
+
+export interface CatalogSummary {
+  total: number;
+  done: number;
+  cards: CatalogCardSummary[];
+}
+
+/**
+ * Сводка каталожной очереди для правой панели: считается по ВСЕМ карточкам
+ * тенанта (не только по активной), с общим nichePack — согласовано с
+ * pickNextCardInQueue, чтобы "активная" карточка совпадала с той, что видна
+ * в plan/sections (раздел 6, 7.1.2, 25 ТЗ v9.1).
+ */
+export function computeCatalogSummary(
+  cards: ProductCard[],
+  pack: NichePack,
+  activeCard?: ProductCard,
+): CatalogSummary {
+  const cardSummaries: CatalogCardSummary[] = cards.map((c) => {
+    const { readiness_score } = computeReadiness(c, pack);
+    const status: CatalogCardSummary["status"] = readiness_score === 100
+      ? "done"
+      : activeCard?.id === c.id
+        ? "current"
+        : "upcoming";
+    return { id: c.id, name: c.name, service_line: c.service_line, readiness_score, status };
+  });
+  return {
+    total: cardSummaries.length,
+    done: cardSummaries.filter((c) => c.status === "done").length,
+    cards: cardSummaries,
+  };
+}
+
 /**
  * Проверяет, готов ли профиль к переходу A→B (раздел 7.1.2 ТЗ v9.1):
  *   • хотя бы одна ProductCard с readiness_score >= 80 (вычисляется через computeReadiness)
